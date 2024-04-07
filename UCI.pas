@@ -499,7 +499,7 @@ procedure DisplayID(CurrentName, CurrentVersion, Author : string);      // respo
 
   WriteLn(output, AnsiString('option name Hash type spin default 64 min 1 max 256'));
   WriteLn(output, AnsiString('option name Clear Hash type button'));
-  WriteLn(output, AnsiString('option name Threads type spin default 6 min 1 max 16'));
+  WriteLn(output, AnsiString('option name Threads type spin default 4 min 1 max 16'));
   WriteLn(output, AnsiString('option name OwnBook type check default true'));
   WriteLn(output, AnsiString('option name UCI_EngineAbout type string default ' + CurrentName + ' ' + CurrentVersion + ' by ' + Author));
 
@@ -513,7 +513,16 @@ procedure DisplayID(CurrentName, CurrentVersion, Author : string);      // respo
 procedure Initialize_Engine(var PVS_Search : TSearch);
   begin
   if assigned(PVS_Search) = false then
+    begin
     PVS_Search := TSearch.Create;
+
+    // set default values
+
+    PVS_Search.ThreadCount := 4;
+    PVS_Search.UseOwnBook := true;
+    if PVS_Search.TransTable.TableSize <> 64 * 65_536 then
+      PVS_Search.TransTable.SetTableSize(64);
+    end;
 
   WriteLn(output, AnsiString('readyok'));      // response to 'isready'
   flush(output);

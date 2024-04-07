@@ -1856,7 +1856,7 @@ procedure TSearch.SetDefault;
   NodeLimit := UInt64(18_446_744_073_709_551_615);    // UInt64.MaxValue
 
   DoParallelSearch := true;
-  ThreadCount := 6;
+  ThreadCount := 8;
 
   DoAspirationSearch := true;
   DoSearchExtension := true;

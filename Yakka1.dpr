@@ -28,8 +28,6 @@ program Yakka1;
 
 {$R *.res}
 
-
-
 {$R *.dres}
 
 uses
@@ -192,20 +190,6 @@ procedure ExecuteProgram;
                            if MakeMoves(Board, GameMoveList, Lexer.FCurChar) = false then
                              Writeln(AnsiString('Illegal Move(s)'));
                          end;
-
-
-        // go ponder                    :
-
-        // go wtime 12_000 btime 1_345 winc 450 binc 450 movestogo 12
-
-        // go depth 12                  : search 12 plies only
-        // go nodes 1_000_000           : search 1_000_000 nodes only
-        // go mate 8                    : search for mate in 8 moves
-        // go movetime 12_000           : search for exactly 12_000 mseconds
-        // go infinite                  : search until the stop command
-
-        // go [depth|nodes|mate|movetime|infinite] searchmoves <move1> <move2> ...
-
 
           tok_go :  begin
                     if assigned(PVS_Search) = false then

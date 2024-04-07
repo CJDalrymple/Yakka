@@ -1,7 +1,6 @@
 # Yakka
 
-Yakka is a Chess Engine writen in object pascal (Delphi) that implements the Universal Chess Interface (UCI) protocol.
-
+**Yakka** is a Chess Engine writen in object pascal (Delphi) that implements the Universal Chess Interface (UCI) protocol.
 
 ## Target Platform
 
@@ -10,30 +9,29 @@ Yakka is a Chess Engine writen in object pascal (Delphi) that implements the Uni
   - Written in Delphi Object Pascal
   - Will run on x86-64 CPU's which support BMI2 instruction set
 
+## How To Use
 
-## How to use
-
-  **Yakka** implements the Universal Chess Interface (UCI) protocol that is compatible with most popular Chess GUIs. 
+**Yakka** implements the Universal Chess Interface (UCI) protocol that is compatible with most popular Chess GUIs. 
   
-  It is recommended to use a Chess GUI application such as 
+It is recommended to use a Chess GUI application such as [Arena](http://www.playwitharena.de/), [BanksiaGUI](https://banksiagui.com/) or [Cute Chess](https://cutechess.com/).
   
-  Alternatively Yakka can be run as a command line console using UCI commands.
-
+Alternatively Yakka can be run as a command line console using UCI commands.
 
 ## Implemented Engine Options (UCI)
 
-  - option name Threads type spin default 6 min 1 max 16
+  - option name Threads type spin default 4 min 1 max 16
   - option name Hash type spin default 64 min 1 max 256
   - option name Clear Hash type button
   - option name OwnBook type check default true 
 
+## Download
+
+You can download the precompiled Windows executable : 'Yakka v1.0 x64.exe'
+This will run on x86-64 CPU's which support the BMI2 instruction set.  
 
 ## Compilation
 
-  You can download the precompiled executable for Windows : 'Yakka v1.0 x64.exe'
-  This will run on x86-64 CPU's which support the BMI2 instruction set.
-
-  To build the engine from source, use Delphi 12.0 Alexandra or later version.
+To build the engine from source, use Delphi 12.0 Alexandra or later version.
 
   - Import the source files from GitHub repository
   - Set Target Platform to Windows 64-bit
@@ -42,7 +40,6 @@ Yakka is a Chess Engine writen in object pascal (Delphi) that implements the Uni
       Type : RCDATA
       Identifier : Open_Book 
   - Build 'Yakka1'
-
 
 ## Functional Details
 
@@ -101,26 +98,23 @@ Yakka is a Chess Engine writen in object pascal (Delphi) that implements the Uni
   - Total Book Positions = 8507 (v1.0)
   - Total Book Moves = 12184 (v1.0)  
 
-
 ## Version History
 
-### Yakka v1.0 
-
-  - 10th April 2024 Initial Release
-
+* Yakka v1.0 - 10th April 2024 Initial Release
 
 ## Help & Support
 
-  Tested on desktop with Intel Core i9-9900K CPU @ 3.60GHz, Windows 11 x64 using 'Arena' GUI
+Tested on desktop with Intel Core i9-9900K CPU @ 3.60GHz, Windows 11 x64, using 'Arena' GUI
+Please let me know of any bugs, compilation-problems or stability issues.
+Any ideas, comments or suggestions for improvement are always welcome.
 
-  Please let me know of any bugs, compilation-problems or stability issues.
-
-  Any ideas, comments or suggestions for improvement are always welcome.
-
+##  License
+  
+This project is licenced under the MIT Licence
 
 ## Future Endevours (TODO)
 
-  In no particular order:
+In no particular order:
   - Much experimenting / tweaking
   - MultiPV
   - Pondering   
