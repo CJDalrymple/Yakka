@@ -82,13 +82,58 @@ var
 
 implementation
 
-
 uses
-  Eval;
+  Search, Eval;
 
 function Distance(Cell1, Cell2 : integer) : integer;
   begin
   result := max( abs(Cell1 shr 3 - Cell2 shr 3), abs(Cell1 and $7 - Cell2 and $7));
+  end;
+
+
+function ManhattanDistance(Cell1, Cell2 : integer) : integer;
+  begin
+  result := abs(Cell1 shr 3 - Cell2 shr 3) + abs(Cell1 and $7 - Cell2 and $7);
+  end;
+
+
+function ShiftRight(Pegs : UInt64) : UInt64;
+  begin
+  result := (Pegs shl 1) and $FEFEFEFEFEFEFEFE;
+  end;
+
+function ShiftLeft(Pegs : UInt64) : UInt64;
+  begin
+  result := (Pegs shr 1) and $7F7F7F7F7F7F7F7F;
+  end;
+
+function ShiftUp(Pegs : UInt64) : UInt64;
+  begin
+  result := (Pegs shr 8);
+  end;
+
+function ShiftDown(Pegs : UInt64) : UInt64;
+  begin
+  result := (Pegs shl 8);
+  end;
+
+function KingRange(Cell : integer; Mask : UInt64) : UInt64;
+  var
+    Fill, temp : UInt64;
+
+  begin
+  Fill := UInt64($1) shl cell;
+    repeat
+    temp := Fill;
+    Fill := Fill or ShiftUp(Fill);
+    Fill := Fill or ShiftDown(Fill);
+    Fill := Fill or ShiftRight(Fill);
+    Fill := Fill or ShiftLeft(Fill);
+    Fill := Fill and not Mask;
+    until
+    temp = Fill;
+
+  result := fill;
   end;
 
 
@@ -293,112 +338,142 @@ function Evaluate_BN(const Board : TBoard; Eval : integer) : integer;
 
   const
 
-    DistanceWB : array[0..63] of integer =
+    EdgePenalty : array[0..63] of integer =
 
-     (1,  15,  29,  43,  57,  71,  85,  99,
-     15,  29,  43,  57,  71,  85,  99,  85,
-     29,  43,  57,  71,  85,  99,  85,  71,
-     43,  57,  71,  85,  99,  85,  71,  57,
-     57,  71,  85,  99,  85,  71,  57,  43,
-     71,  85,  99,  85,  71,  57,  43,  29,
-     85,  99,  85,  71,  57,  43,  29,  15,
-     99,  85,  71,  57,  43,  29,  15,   1);
+     (  0,   0,   0,   0,   0,   0,   0,  0,
+        0,  16,  16,  16,  16,  16,  16,  0,
+        0,  16,  25,  25,  25,  25,  16,  0,
+        0,  16,  25,  29,  29,  25,  16,  0,
+        0,  16,  25,  29,  29,  25,  16,  0,
+        0,  16,  25,  25,  25,  25,  16,  0,
+        0,  16,  16,  16,  16,  16,  16,  0,
+        0,   0,   0,   0,   0,   0,   0,  0);
 
-    DistanceBB : array[0..63] of integer =
 
-     (99,  85,  71,  57,  43,  29,  15,   1,
-      85,  99,  85,  71,  57,  43,  29,  15,
-      71,  85,  99,  85,  71,  57,  43,  29,
-      57,  71,  85,  99,  85,  71,  57,  43,
-      43,  57,  71,  85,  99,  85,  71,  57,
-      29,  43,  57,  71,  85,  99,  85,  71,
-      15,  29,  43,  57,  71,  85,  99,  85,
-       1,  15,  29,  43,  57,  71,  85,  99);
+     CornerDistance_W : array[0..63] of integer =
+
+     (  0,  1,  2,  3,  4,  5,  6,  7,
+        1,  1,  2,  3,  4,  5,  6,  6,
+        2,  2,  2,  3,  4,  5,  5,  5,
+        3,  3,  3,  3,  4,  4,  4,  4,
+        4,  4,  4,  4,  3,  3,  3,  3,
+        5,  5,  5,  4,  3,  2,  2,  2,
+        6,  6,  5,  4,  3,  2,  1,  1,
+        7,  6,  5,  4,  3,  2,  1,  0);
+
+
+     CornerDistance_B : array[0..63] of integer =
+
+     (  7,  6,  5,  4,  3,  2,  1,  0,
+        6,  6,  5,  4,  3,  2,  1,  1,
+        5,  5,  5,  4,  3,  2,  2,  2,
+        4,  4,  4,  4,  3,  3,  3,  3,
+        3,  3,  3,  3,  4,  4,  4,  4,
+        2,  2,  2,  3,  4,  5,  5,  5,
+        1,  1,  2,  3,  4,  5,  6,  6,
+        0,  1,  2,  3,  4,  5,  6,  7);
+
 
   var
-    blackking, whiteking, cell, penalty : integer;
+    blackKing, whiteKing, AttackingKing, DefendingKing, penalty, BishopCell, KnightCell : integer;
+    knightDist, cornerDist, kingDist : integer;
+    Mask, cornerMask, kingPrison : UInt64;
 
   begin
-  if (abs(Eval) < 400) or (abs(Eval) > MateScore) then        // to avoid case where one piece captured
-    exit(eval);                                                         // or mate score found
-
   BlackKing :=  GetLowBit_Alt(Board.Kings and Board.BlackPegs);
   WhiteKing :=  GetLowBit_Alt(Board.Kings and Board.WhitePegs);
 
-  if (Board.Knights and Board.BlackPegs) <> 0 then    // black winning
-    cell := WhiteKing
+  knightCell := GetLowBit_Alt(Board.Knights);
+  bishopCell := GetLowBit_Alt(Board.Bishops);
+
+  if (Board.Knights and Board.WhitePegs) <> 0 then
+    begin
+    DefendingKing := BlackKing; // white winning
+    AttackingKing := WhiteKing;
+    end
    else
-    cell := BlackKing;
+    begin
+    DefendingKing := WhiteKing;  // black winning
+    AttackingKing := BlackKing;
+    end;
+
+  kingDist := Distance(WhiteKing, BlackKing);
+
+  penalty :=  kingDist + ManhattanDistance(WhiteKing, BlackKing);     // goal : keep kings close
+  penalty :=  penalty + EdgePenalty[DefendingKing];                   // goal : push defending king to edge of the board
+
+  knightDist := Distance(DefendingKing, knightCell);
+  penalty := penalty + max(knightDist - 3, 0) * 3;                    // goal : bring knight closer to the action
 
   if (Board.Bishops and whitesqr) <> 0 then
-    penalty := DistanceWB[cell]
+    begin
+    cornerDist := CornerDistance_W[DefendingKing];
+    cornerMask := $8000000000000001;
+    end
    else
-    penalty := DistanceBB[cell];
+    begin
+    cornerDist := CornerDistance_B[DefendingKing];
+    cornerMask := $100000000000080;
+    end;
 
-  penalty := penalty + Distance(WhiteKing, BlackKing) * 2;
+  penalty := penalty + cornerDist * 19;                               // goal : push defending king towards mate corner
 
-  if cell = WhiteKing then
-    result := Eval + penalty * 4     // Black winning
+  Mask := Board.KnightMask[knightCell];
+  Mask := Mask or Board.BishopAttack_asm(bishopCell);
+  Mask := Mask or Board.KingMask[AttackingKing];
+
+  kingPrison := KingRange(DefendingKing, Mask);                       // confine defending king and squeeze
+  penalty := penalty + min(bitcount(kingPrison), 18);
+
+  if (Board.Bishops and Board.BlackPegs) <> 0 then
+    result := -Material_Table[4, 0] - 165 + penalty   // black is winning, so white is down on material and larger penalty is better for white
    else
-    result := Eval - penalty * 4    // White winning
+    result := Material_Table[4, 0] + 165 - penalty;   // white is winning, so white is up material and smaller penalty is better for white
   end;
 
 
-function Evaluate_MatebyBlack(const Board : TBoard; Eval : integer) : integer;
+function Evaluate_EasyMate(const Board : TBoard; Eval : integer) : integer;
+
   const
-   CentreDistance : array[0..63] of integer =
-       (18, 13, 10,  9,  9, 10, 13, 18,
-        13,  8,  5,  4,  4,  5,  8, 13,
-        10,  5,  2,  1,  1,  2,  5, 10,
-         9,  4 , 1,  0,  0,  1,  4,  9,
-         9,  4 , 1,  0,  0,  1,  4,  9,
-        10,  5,  2,  1,  1,  2,  5, 10,
-        13,  8,  5,  4,  4,  5,  8, 13,
-        18, 13, 10,  9,  9, 10, 13, 18);
+    EdgeBonus : array[0..63] of integer =
+       (17,	 10,	  5,	  2,	  2,	  5,	 10,	 17,
+        10,	  3,   -2,   -5,   -5,   -2,    3,	 10,
+         5,  -4,   -7, 	-10,  -10, 	 -7,   -2,	  5,
+         2,	 -5,  -10,  -13,  -13,  -10,   -5,	  2,
+         2,	 -5,  -10,  -13,  -13,  -10,   -5,	  2,
+         5,  -2,   -7, 	-10,  -10, 	 -7,   -2,	  5,
+        10,	  3,   -2,   -5,   -5,   -2,    3,	 10,
+        17,	 10,	  5,	  2,	  2,	  5,	 10,	 17);
 
   var
-    blackking, whiteking, bonus : integer;
+    BlackKingCell, WhiteKingCell, FlipCell, index, material : integer;
 
  // Mate with K vs kxx.
- // Black bonus to drive the white king towards the edge of board
- // and keep black king close to white king.
-
-  begin
-  BlackKing :=  GetLowBit_Alt(Board.Kings and Board.BlackPegs);
-  WhiteKing :=  GetLowBit_Alt(Board.Kings and Board.WhitePegs);
-
-  bonus := CentreDistance[WhiteKing];
-  bonus := bonus - Distance(WhiteKing, BlackKing) * 2;
-  result := Eval - bonus;
-  end;
-
-
-function Evaluate_MatebyWhite(const Board : TBoard; Eval : integer) : integer;
-  const
-   CentreDistance : array[0..63] of integer =
-       (18, 13, 10,  9,  9, 10, 13, 18,
-        13,  8,  5,  4,  4,  5,  8, 13,
-        10,  5,  2,  1,  1,  2,  5, 10,
-         9,  4 , 1,  0,  0,  1,  4,  9,
-         9,  4 , 1,  0,  0,  1,  4,  9,
-        10,  5,  2,  1,  1,  2,  5, 10,
-        13,  8,  5,  4,  4,  5,  8, 13,
-        18, 13, 10,  9,  9, 10, 13, 18);
-
-  var
-    blackking, whiteking, bonus : integer;
-
- // Mate with Kxx vs k.
- // White bonus to drive the black king towards the edge of board
+ // Returns score with bonus from white perspective
+ // Bonus to drive the black king towards the edge of board,
+ // keep white king towards the centre,
  // and keep white king close to black king.
 
   begin
-  BlackKing :=  GetLowBit_Alt(Board.Kings and Board.BlackPegs);
-  WhiteKing :=  GetLowBit_Alt(Board.Kings and Board.WhitePegs);
+  BlackKingCell :=  GetLowBit_Alt(Board.Kings and Board.BlackPegs);
+  WhiteKingCell :=  GetLowBit_Alt(Board.Kings and Board.WhitePegs);
+  FlipCell := FlipLookup[BlackKingCell];
 
-  bonus := CentreDistance[BlackKing];
-  bonus := bonus - Distance(WhiteKing, BlackKing) * 2;
-  result := Eval + bonus;
+  index := bitcount(Board.knights) + bitcount(Board.bishops)*3 + bitcount(Board.rooks)*9 + min(bitcount(Board.queens), 1) * 21;
+  Material := Material_Table[index, 0];
+  if bitcount(Board.queens) > 1 then
+    Material := material + SecondQueenValue;
+
+  if Eval > 0 then
+    begin    // white winning
+    result :=  (300 + Material) + EdgeBonus[BlackKingCell] - EdgeBonus[WhiteKingCell] ;
+    result := result - Distance(WhiteKingCell, BlackKingCell) - ManhattanDistance(WhiteKingCell, BlackKingCell);        // white winning : closer together is better for white
+    end
+   else
+    begin    // black winning
+    result :=  -(300 + Material) + EdgeBonus[BlackKingCell] - EdgeBonus[WhiteKingCell];
+    result := result + Distance(WhiteKingCell, BlackKingCell) + ManhattanDistance(WhiteKingCell, BlackKingCell);        // black winning : further apart is better for white
+    end;
   end;
 
 
@@ -471,22 +546,22 @@ class operator T_EndGame_Table.Initialize (out Dest: T_EndGame_Table);
   // kr v K  : Simple Mate by Black
   BoardFromFEN('r3k3/8/8/8/8/8/8/4K3 w - - 0 1', Board);
   Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MatebyBlack);
+  Dest.AddCase(Hash, Evaluate_EasyMate);
 
   // k v KR  : Simple Mate
   BoardFromFEN('4k3/8/8/8/8/8/8/R3K3 w - - 0 1', Board);
   Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MatebyWhite);
+  Dest.AddCase(Hash, Evaluate_EasyMate);
 
   // kq v K  : Simple Mate
   BoardFromFEN('3qk3/8/8/8/8/8/8/4K3 w - - 0 1', Board);
   Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MatebyBlack);
+  Dest.AddCase(Hash, Evaluate_EasyMate);
 
   // k v KQ  : Simple Mate
   BoardFromFEN('4k3/8/8/8/8/8/8/3QK3 w - - 0 1', Board);
   Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MatebyWhite);
+  Dest.AddCase(Hash, Evaluate_EasyMate);
 
   // b" = bishop white squares,  b' = bishop black squares
 
@@ -600,56 +675,53 @@ class operator T_EndGame_Table.Initialize (out Dest: T_EndGame_Table);
   // kbb v K  : Simple Mate by Black
   BoardFromFEN('2b1kb2/8/8/8/8/8/8/3K4 w - - 0 1', Board);
   Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MatebyBlack);
+  Dest.AddCase(Hash, Evaluate_EasyMate);
 
   // k v KBB  : Simple Mate by White
   BoardFromFEN('4k3/8/8/8/8/8/8/2B1KB2 w - - 0 1', Board);
   Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MatebyWhite);
-
+  Dest.AddCase(Hash, Evaluate_EasyMate);
 
   // kq v KR  : Mate by Black
   BoardFromFEN('3qk3/8/8/8/8/8/8/R3K3 w - - 0 1', Board);
   Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MatebyBlack);
+  Dest.AddCase(Hash, Evaluate_EasyMate);
 
   // kr v KQ  : Mate by White
   BoardFromFEN('r3k3/8/8/8/8/8/8/3QK3 w - - 0 1', Board);
   Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MatebyWhite);
-
+  Dest.AddCase(Hash, Evaluate_EasyMate);
 
   // kq v KB'  : Mate by Black
   BoardFromFEN('3qk3/8/8/8/8/8/8/2B1K3 w - - 0 1', Board);
   Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MatebyBlack);
+  Dest.AddCase(Hash, Evaluate_EasyMate);
 
   // kq v KB"  : Mate by Black
   BoardFromFEN('3qk3/8/8/8/8/8/8/4KB2 w - - 0 1', Board);
   Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MatebyBlack);
+  Dest.AddCase(Hash, Evaluate_EasyMate);
 
   // kb" v KQ  : Mate by White
   BoardFromFEN('2b1k3/8/8/8/8/8/8/3QK3 w - - 0 1', Board);
   Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MatebyWhite);
+  Dest.AddCase(Hash, Evaluate_EasyMate);
+
 
   // kb' v KQ  : Mate by White
   BoardFromFEN('4kb2/8/8/8/8/8/8/3QK3 w - - 0 1', Board);
   Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MatebyWhite);
-
+  Dest.AddCase(Hash, Evaluate_EasyMate);
 
   // kq v KN  : Mate by Black
   BoardFromFEN('3qk3/8/8/8/8/8/8/1N2K3 w - - 0 1', Board);
   Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MatebyBlack);
+  Dest.AddCase(Hash, Evaluate_EasyMate);
 
   // kn v KQ  : Mate by White
   BoardFromFEN('1n2k3/8/8/8/8/8/8/3QK3 w - - 0 1', Board);
   Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MatebyWhite);
-
+  Dest.AddCase(Hash, Evaluate_EasyMate);
 
   // knb" v K   : Mate
   BoardFromFEN('1nb1k3/8/8/8/8/8/8/4K3 w - - 0 1', Board);
@@ -708,6 +780,7 @@ class operator T_EndGame_Table.Initialize (out Dest: T_EndGame_Table);
   BoardFromFEN('1n2k3/8/8/8/8/8/P7/4K3 w - - 0 1', Board);
   Hash := MaterialHashFromBoard(Board);
   Dest.AddCase(Hash, Evaluate_MostlyDraw);
+
 
 
   // 5-man eval
@@ -817,6 +890,7 @@ class operator T_EndGame_Table.Initialize (out Dest: T_EndGame_Table);
   Dest.AddCase(Hash, Evaluate_Draw);
 
 
+
   // TODO expand this with dedicated evaluation
 
   // krp v KR  : winable but dificult
@@ -830,6 +904,7 @@ class operator T_EndGame_Table.Initialize (out Dest: T_EndGame_Table);
   BoardFromFEN('r3k3/8/8/8/8/8/P7/R4K3 w - - 0 1', Board);
   Hash := MaterialHashFromBoard(Board);
   Dest.AddCase(Hash, Evaluate_MostlyDraw);
+
 
 
   // kb"p v KB"  : drawish : don't want to exchange into this position
@@ -880,6 +955,7 @@ class operator T_EndGame_Table.Initialize (out Dest: T_EndGame_Table);
   BoardFromFEN('4kb2/8/8/8/8/8/P7/2B1K3 w - - 0 1', Board);
   Hash := MaterialHashFromBoard(Board);
   Dest.AddCase(Hash, Evaluate_MostlyDraw);
+
 
 
   // kb' v KPP  : drawish : don't want to exchange into this position

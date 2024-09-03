@@ -111,6 +111,7 @@ type
     end;
 
 procedure DisplayID(CurrentName, CurrentVersion, Author : string);
+procedure CheckIsReady(var PVS_Search : TSearch);
 procedure Initialize_Engine(var PVS_Search : TSearch);
 procedure New_Game(var Board : TBoard; var GameMoveList : TGameMoveList; var PVS_Search : TSearch);
 
@@ -499,8 +500,8 @@ procedure DisplayID(CurrentName, CurrentVersion, Author : string);      // respo
 
   WriteLn(output, AnsiString('option name Hash type spin default 64 min 1 max 256'));
   WriteLn(output, AnsiString('option name Clear Hash type button'));
-  WriteLn(output, AnsiString('option name Threads type spin default 4 min 1 max 16'));
-  WriteLn(output, AnsiString('option name OwnBook type check default true'));
+  WriteLn(output, AnsiString('option name Threads type spin default 1 min 1 max 16'));
+  WriteLn(output, AnsiString('option name OwnBook type check default false'));
   WriteLn(output, AnsiString('option name UCI_EngineAbout type string default ' + CurrentName + ' ' + CurrentVersion + ' by ' + Author));
 
   WriteLn(output, AnsiString(' '));
@@ -518,11 +519,18 @@ procedure Initialize_Engine(var PVS_Search : TSearch);
 
     // set default values
 
-    PVS_Search.ThreadCount := 4;
-    PVS_Search.UseOwnBook := true;
+    PVS_Search.ThreadCount := 1;
+    PVS_Search.UseOwnBook := false;
     if PVS_Search.TransTable.TableSize <> 64 * 65_536 then
       PVS_Search.TransTable.SetTableSize(64);
     end;
+  end;
+
+
+procedure CheckIsReady(var PVS_Search : TSearch);
+  begin
+  if assigned(PVS_Search) = false then
+    Initialize_Engine(PVS_Search);
 
   WriteLn(output, AnsiString('readyok'));      // response to 'isready'
   flush(output);
@@ -532,7 +540,7 @@ procedure Initialize_Engine(var PVS_Search : TSearch);
 procedure New_Game(var Board : TBoard; var GameMoveList : TGameMoveList; var PVS_Search : TSearch);  // response to 'ucinewgame'
   begin
   if assigned(PVS_Search) = false then
-    PVS_Search := TSearch.Create;
+    Initialize_Engine(PVS_Search);
 
   PVS_Search.NewGame;
   Board.Reset;

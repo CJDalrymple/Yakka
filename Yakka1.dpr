@@ -1,6 +1,6 @@
 //  The MIT License (MIT)
 
-//  Chess Engine Yakka v1.0
+//  Chess Engine Yakka
 //  Copyright (c) 2024 Christopher Crone
 
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -46,8 +46,11 @@ uses
 
 const
   CurrentName = 'Yakka';
-  CurrentVersion = 'v1.0';
+  CurrentVersion = 'v1.0r';
+  VersionDate =   '3 Sept 2024';
   Author = 'Christopher Crone';
+
+  // test > position fen 2r2rk1/1ppq2b1/1n6/1N1Ppp2/p7/Pn2BP2/1PQ1BP2/3RK2R w K - 0 23
 
 var
   Board : TBoard;
@@ -124,7 +127,13 @@ procedure ExecuteProgram;
   var
     IntegerNumber : Integer;
     tempToken : TTokenKind;
-    MovesToGoFlag : boolean;
+
+    TimeRemaining_White : UInt64;           // UCI:   wtime <x> white has x msec left on the clock
+    TimeRemaining_Black : UInt64;           // UCI:   btime <x> black has x msec left on the clock
+    TimeIncrementPerMove_White : UInt64;    // UCI:   winc <x> white time increment per move in msec if x>0
+    TimeIncrementPerMove_Black : UInt64;    // UCI:   binc <x> black time increment per move in msec if x>0
+    MovesToGo :  UInt64;                    // UCI:   movestogo <x> therre are x moves until the next time control if x>0 (only sent if x>0)
+
     Buff: array[0..8191] of AnsiChar;
 
   begin
@@ -134,277 +143,284 @@ procedure ExecuteProgram;
   TTextRec(Input).BufSize := SizeOf(Buff);
   TTextRec(Input).BufPtr := @Buff;
 
+  WriteLn(output, AnsiString(CurrentName + ' ' + CurrentVersion + ' by ' + Author));
+  WriteLn(output, AnsiString(' '));
+
+  if PopCnt_Supported = false then
+    begin
+    WriteLn(output, AnsiString('Warning : CPU doesn''t support PopCnt asm instruction'));
+    WriteLn(output, AnsiString('Yakka will not run correctly on this CPU'));
+    WriteLn(output, AnsiString('type ''quit'' to exit'));
+    end;
+
+  if BMI2_Supported = false then
+    begin
+    WriteLn(output, AnsiString('Warning : CPU doesn''t support BMI2 instructions'));
+    WriteLn(output, AnsiString('PEXT and PDEP asm instructions are required for move generation'));
+    WriteLn(output, AnsiString('Yakka will not run correctly on this CPU'));
+    WriteLn(output, AnsiString('type ''quit'' to exit'));
+    end;
+
+  //WriteLn('To quit, type Q followed by ENTER');
+
+  flush(output);
+
     try
-    WriteLn(output, AnsiString(CurrentName + ' ' + CurrentVersion + ' by ' + Author));
-    WriteLn(output, AnsiString(' '));
-
-    if PopCnt_Supported = false then
-      begin
-      WriteLn(output, AnsiString('Warning : CPU doesn''t support PopCnt asm instruction'));
-      WriteLn(output, AnsiString('Yakka will not run correctly on this CPU'));
-      WriteLn(output, AnsiString('type ''quit'' to exit'));
-      end;
-
-    if BMI2_Supported = false then
-      begin
-      WriteLn(output, AnsiString('Warning : CPU doesn''t support BMI2 instructions'));
-      WriteLn(output, AnsiString('PEXT and PDEP asm instructions are required for move generation'));
-      WriteLn(output, AnsiString('Yakka will not run correctly on this CPU'));
-      WriteLn(output, AnsiString('type ''quit'' to exit'));
-      end;
-
-    flush(output);
-
-    //WriteLn('To quit, type Q followed by ENTER');
-
     Quit := False;
 
     while not Quit do
       begin
       ReadLn(input, S);
 
-      Lexer.Initialize(PAnsiChar(S));
-      Lexer.GetNextToken;
+      if s <> '' then
+        begin
+        Lexer.Initialize(PAnsiChar(S));
+        Lexer.GetNextToken;
 
-        case
-        Lexer.FTokenKind of
+          case
+          Lexer.FTokenKind of
 
-          tok_uci : DisplayID(CurrentName, CurrentVersion, Author);
+            tok_uci : DisplayID(CurrentName, CurrentVersion, Author);
 
-          tok_isready  : Initialize_Engine(PVS_Search);
+            tok_isready  : CheckIsReady(PVS_Search);
 
-          tok_ucinewgame : New_Game(Board, GameMoveList, PVS_Search);
+            tok_ucinewgame : New_Game(Board, GameMoveList, PVS_Search);
 
-          tok_position : begin                        // [position fen <fenstring> | startpos]  moves <move1> .... <movei>
-                         Lexer.GetNextToken;
-                         if Lexer.FTokenKind = tok_fen then
-                           SetUpPositionFromFen(Board, GameMoveList, Lexer.FCurChar)      // TODO extract fen if S contains moves
+            tok_position : begin                        // [position fen <fenstring> | startpos]  moves <move1> .... <movei>
+                           Lexer.GetNextToken;
+                           if Lexer.FTokenKind = tok_fen then
+                             SetUpPositionFromFen(Board, GameMoveList, Lexer.FCurChar)      // TODO extract fen if S contains moves
 
-                          else if Lexer.FTokenKind = tok_startpos then
-                           SetUpPositionFromStart(Board, GameMoveList)
-                          else
-                           Writeln(AnsiString('Unknown Command'));
+                            else if Lexer.FTokenKind = tok_startpos then
+                             SetUpPositionFromStart(Board, GameMoveList)
+                            else
+                             Writeln(AnsiString('Unknown Command'));
 
-                         Lexer.GetNextToken;
-                         if Lexer.FTokenKind = tok_moves then
-                           if MakeMoves(Board, GameMoveList, Lexer.FCurChar) = false then
-                             Writeln(AnsiString('Illegal Move(s)'));
-                         end;
+                           Lexer.GetNextToken;
+                           if Lexer.FTokenKind = tok_moves then
+                             if MakeMoves(Board, GameMoveList, Lexer.FCurChar) = false then
+                               Writeln(AnsiString('Illegal Move(s)'));
+                           end;
 
-          tok_go :  begin
-                    if assigned(PVS_Search) = false then
-                      PVS_Search := TSearch.Create;
+            tok_go :  begin
+                      if assigned(PVS_Search) = false then
+                        Initialize_Engine(PVS_Search);
 
-                    Lexer.GetNextToken;
-
-                    if Lexer.FTokenKind = tok_depth then
-                      begin
                       Lexer.GetNextToken;
-                      if Lexer.FTokenKind = tok_number then
+
+                      if Lexer.FTokenKind = tok_depth then
                         begin
-                        IntegerNumber := strToInt(Lexer.fToken);
-
-                        PVS_Search.DepthLimit := IntegerNumber;
-                        PVS_Search.TimeLimit := UInt64(18_446_744_073_709_551_615);    // UInt64.MaxValue
-                        PVS_Search.NodeLimit := UInt64(18_446_744_073_709_551_615);    // UInt64.MaxValue
-
-                        PVS_Search.StartInBackGround(Board, GameMoveList);
-                        end
-                       else
-                        begin
-                        Writeln(output, AnsiString('Unknown Depth'));
-                        flush(output);
-                        end;
-                      end;
-
-                    if Lexer.FTokenKind = tok_nodes then
-                      begin
-                      Lexer.GetNextToken;
-                      if Lexer.FTokenKind = tok_number then
-                        begin
-                        IntegerNumber := strToInt(Lexer.fToken);
-
-                        PVS_Search.DepthLimit := MaxSearchPly;
-                        PVS_Search.TimeLimit := UInt64(18_446_744_073_709_551_615);    // UInt64.MaxValue
-                        PVS_Search.NodeLimit := IntegerNumber;
-
-                        PVS_Search.StartInBackGround(Board, GameMoveList);
-                        end
-                       else
-                        begin
-                        Writeln(output, AnsiString('Unknown Nodes'));
-                        flush(output);
-                        end;
-                      end;
-
-                    if Lexer.FTokenKind = tok_mate then
-                      Writeln(AnsiString('mate'));
-
-                    if Lexer.FTokenKind = tok_movetime then
-                      begin
-                      Lexer.GetNextToken;
-                      if Lexer.FTokenKind = tok_number then
-                        begin
-                        IntegerNumber := strToInt(Lexer.fToken);
-
-                        PVS_Search.DepthLimit := MaxSearchPly;
-                        PVS_Search.TimeLimit := IntegerNumber;
-                        PVS_Search.NodeLimit := UInt64(18_446_744_073_709_551_615);    // UInt64.MaxValue
-
-                        PVS_Search.StartInBackGround(Board, GameMoveList);
-                        end
-                       else
-                        begin
-                        Writeln(output, AnsiString('Unknown Time'));
-                        flush(output)
-                        end;
-                      end;
-
-                    if Lexer.FTokenKind = tok_infinite then
-                      begin
-
-                      PVS_Search.DepthLimit := MaxSearchPly;
-                      PVS_Search.TimeLimit := UInt64(18_446_744_073_709_551_615);    // UInt64.MaxValue
-                      PVS_Search.NodeLimit := UInt64(18_446_744_073_709_551_615);    // UInt64.MaxValue
-
-                      PVS_Search.StartInBackGround(Board, GameMoveList);
-                      end;
-
-                    if Lexer.FTokenKind in [tok_wtime, tok_btime, tok_winc, tok_binc, tok_movestogo] then
-                      begin
-                      MovesToGoFlag := false;
-
-                      PVS_Search.TimeRemaining_White := 0;
-                      PVS_Search.TimeRemaining_Black := 0;
-                      PVS_Search.TimeIncrementPerMove_White := 0;
-                      PVS_Search.TimeIncrementPerMove_Black := 0;
-                      PVS_Search.MovesToGo := 0;
-
-                        repeat
-                        tempToken := Lexer.FTokenKind;
                         Lexer.GetNextToken;
                         if Lexer.FTokenKind = tok_number then
                           begin
-                          IntegerNumber := strToInt(Lexer.FToken);
+                          IntegerNumber := strToInt(Lexer.fToken);
 
-                            case tempToken of
-                            tok_wtime     : PVS_Search.TimeRemaining_White := IntegerNumber;
-                            tok_btime     : PVS_Search.TimeRemaining_Black := IntegerNumber;
-                            tok_winc      : PVS_Search.TimeIncrementPerMove_White := IntegerNumber;
-                            tok_binc      : PVS_Search.TimeIncrementPerMove_Black := IntegerNumber;
-                            tok_movesToGo : begin
-                                            PVS_Search.MovesToGo := IntegerNumber;
-                                            MovesToGoFlag := true;
-                                            end;
-                            end;
+                          PVS_Search.DepthLimit := IntegerNumber;
+                          PVS_Search.TimeLimit := TimeLimit_Max;
+                          PVS_Search.HardTimeLimit := TimeLimit_Max;
+                          PVS_Search.NodeLimit := NodeLimit_Max;
 
-                          Lexer.GetNextToken;
+                          PVS_Search.StartInBackGround(Board, GameMoveList);
                           end
                          else
                           begin
-                          Writeln(output, AnsiString('Error : Number expected'));
+                          Writeln(output, AnsiString('Unknown Depth'));
                           flush(output);
                           end;
-                        until Lexer.FTokenKind = tok_EOL;
+                        end;
 
-                      PVS_Search.DepthLimit := MaxSearchPly;
-
-                      if MovesToGoFlag = false then
+                      if Lexer.FTokenKind = tok_nodes then
                         begin
-                        if Board.ToPlay = White then
-                          PVS_Search.TimeLimit := AllocateTimeForMove_2A(PVS_Search.TimeRemaining_White, PVS_Search.TimeIncrementPerMove_White, Board.TurnNumber, Board)
+                        Lexer.GetNextToken;
+                        if Lexer.FTokenKind = tok_number then
+                          begin
+                          IntegerNumber := strToInt(Lexer.fToken);
+
+                          PVS_Search.DepthLimit := MaxSearchPly;
+                          PVS_Search.TimeLimit := TimeLimit_Max;
+                          PVS_Search.HardTimeLimit := TimeLimit_Max;
+                          PVS_Search.NodeLimit := IntegerNumber;
+
+                          PVS_Search.StartInBackGround(Board, GameMoveList);
+                          end
                          else
-                          PVS_Search.TimeLimit := AllocateTimeForMove_2A(PVS_Search.TimeRemaining_Black, PVS_Search.TimeIncrementPerMove_Black, Board.TurnNumber, Board);
-                        end
-                       else
-                        PVS_Search.CalcTimeLimit(Board);
+                          begin
+                          Writeln(output, AnsiString('Unknown Nodes'));
+                          flush(output);
+                          end;
+                        end;
 
-                      PVS_Search.NodeLimit := UInt64(18_446_744_073_709_551_615);    // UInt64.MaxValue
+                      if Lexer.FTokenKind = tok_mate then
+                        Writeln(AnsiString('mate'));
 
-                      PVS_Search.StartInBackGround(Board, GameMoveList);
-                      end;
+                      if Lexer.FTokenKind = tok_movetime then
+                        begin
+                        Lexer.GetNextToken;
+                        if Lexer.FTokenKind = tok_number then
+                          begin
+                          IntegerNumber := strToInt(Lexer.fToken);
 
-                    if Lexer.FTokenKind = tok_ponder then
-                      Writeln(output, AnsiString('ponder'));
-                    end;
+                          PVS_Search.DepthLimit := MaxSearchPly;
+                          PVS_Search.TimeLimit := IntegerNumber;
+                          PVS_Search.HardTimeLimit := IntegerNumber;
+                          PVS_Search.NodeLimit := NodeLimit_Max;
 
-          tok_draw : DrawBoard(Board);
+                          PVS_Search.StartInBackGround(Board, GameMoveList);
+                          end
+                         else
+                          begin
+                          Writeln(output, AnsiString('Unknown Time'));
+                          flush(output)
+                          end;
+                        end;
 
-          tok_setoption : begin
-                          if assigned(PVS_Search) = false then
-                            PVS_Search := TSearch.Create;
+                      if Lexer.FTokenKind = tok_infinite then
+                        begin
 
+                        PVS_Search.DepthLimit := MaxSearchPly;
+                        PVS_Search.TimeLimit := TimeLimit_Max;
+                        PVS_Search.HardTimeLimit := TimeLimit_Max;
+                        PVS_Search.NodeLimit := NodeLimit_Max;
+
+                        PVS_Search.StartInBackGround(Board, GameMoveList);
+                        end;
+
+                      if Lexer.FTokenKind in [tok_wtime, tok_btime, tok_winc, tok_binc, tok_movestogo] then
+                        begin
+                        TimeRemaining_White := 0;
+                        TimeRemaining_Black := 0;
+                        TimeIncrementPerMove_White := 0;
+                        TimeIncrementPerMove_Black := 0;
+                        MovesToGo := 0;
+
+                          repeat
+                          tempToken := Lexer.FTokenKind;
                           Lexer.GetNextToken;
-
-                          if Lexer.FTokenKind = tok_name then
+                          if Lexer.FTokenKind = tok_number then
                             begin
+                            IntegerNumber := strToInt(Lexer.FToken);
+
+                              case tempToken of
+                              tok_wtime     : TimeRemaining_White := IntegerNumber;
+                              tok_btime     : TimeRemaining_Black := IntegerNumber;
+                              tok_winc      : TimeIncrementPerMove_White := IntegerNumber;
+                              tok_binc      : TimeIncrementPerMove_Black := IntegerNumber;
+                              tok_movesToGo : MovesToGo := max(IntegerNumber, 0);
+                              end;
+
                             Lexer.GetNextToken;
-
-                            if Lexer.FTokenKind = tok_Hash then                 // option name Hash type spin default 64 min 1 max 256
-                              begin
-                              Lexer.GetNextToken;
-                              if Lexer.FTokenKind = tok_value then
-                                begin
-                                Lexer.GetNextToken;
-                                if Lexer.FTokenKind = tok_number then
-                                  begin
-                                  IntegerNumber := strToInt(Lexer.FToken);
-                                  IntegerNumber := max(min(IntegerNumber, 256), 1);
-                                  PVS_Search.SetTransTableSize(IntegerNumber);
-                                  end;
-                                end
-
-                              else if Lexer.FTokenKind = tok_ClearHash then
-                                begin
-                                PVS_Search.ClearTranspositionTable;             // option name Clear Hash type button
-                                end;
-                              end;
-
-                            if Lexer.FTokenKind = tok_Threads then              // option name Threads type spin default 6 min 1 max 16
-                              begin
-                              Lexer.GetNextToken;
-                              if Lexer.FTokenKind = tok_value then
-                                begin
-                                Lexer.GetNextToken;
-                                if Lexer.FTokenKind = tok_number then
-                                  begin
-                                  IntegerNumber := strToInt(Lexer.FToken);
-                                  IntegerNumber := max(min(IntegerNumber, 16), 1);
-
-                                  PVS_Search.SetThreadCount(IntegerNumber);
-                                  end;
-                                end;
-                              end;
-
-                            if Lexer.FTokenKind = tok_OwnBook then              // option name OwnBook type check default true
-                              begin
-                              Lexer.GetNextToken;
-                              if Lexer.FTokenKind = tok_true then
-                                PVS_Search.UseOwnBook := true
-                               else if Lexer.FTokenKind = tok_false then
-                                PVS_Search.UseOwnBook := false;
-                              end;
-
-                            if Lexer.FTokenKind = tok_EngineAbout then          // option name UCI_EngineAbout type string default 'Yakka 1.0 by Christopher Crone'
-                              begin
-                              Writeln(output, AnsiString(' '));
-                              Writeln(output, AnsiString(CurrentName + ' ' + CurrentVersion + ' by ' + Author));
-                              end;
-
+                            end
+                           else
+                            begin
+                            Writeln(output, AnsiString('Error : Number expected'));
+                            flush(output);
                             end;
+                          until Lexer.FTokenKind = tok_EOL;
+
+                        PVS_Search.DepthLimit := MaxSearchPly;
+
+                        if Board.ToPlay = White then
+                          begin
+                          PVS_Search.TimeLimit := AllocateTimeForSearch_Alt(MovesToGo, TimeRemaining_White, TimeIncrementPerMove_White, Board.TurnNumber);
+                          PVS_Search.HardTimeLimit := TimeRemaining_White;
+                          end
+                         else
+                          begin
+                          PVS_Search.TimeLimit := AllocateTimeForSearch_Alt(MovesToGo, TimeRemaining_Black, TimeIncrementPerMove_Black, Board.TurnNumber);
+                          PVS_Search.HardTimeLimit := TimeRemaining_Black;
                           end;
 
-          tok_stop : HaltSearch(PVS_Search);
+                        PVS_Search.NodeLimit := NodeLimit_Max;
 
-          tok_quit : Quit := true;
+                        PVS_Search.StartInBackGround(Board, GameMoveList);
+                        end;
 
-         else
-          begin
-          Writeln(output, AnsiString('Unknown Command'));
-          flush(output);
+                      if Lexer.FTokenKind = tok_ponder then
+                        Writeln(output, AnsiString('ponder'));
+                      end;
+
+            tok_draw : DrawBoard(Board);
+
+            tok_setoption : begin
+                            if assigned(PVS_Search) = false then
+                              Initialize_Engine(PVS_Search);
+
+                            Lexer.GetNextToken;
+
+                            if Lexer.FTokenKind = tok_name then
+                              begin
+                              Lexer.GetNextToken;
+
+                              if Lexer.FTokenKind = tok_Hash then                 // option name Hash type spin default 64 min 1 max 256
+                                begin
+                                Lexer.GetNextToken;
+                                if Lexer.FTokenKind = tok_value then
+                                  begin
+                                  Lexer.GetNextToken;
+                                  if Lexer.FTokenKind = tok_number then
+                                    begin
+                                    IntegerNumber := strToInt(Lexer.FToken);
+                                    IntegerNumber := max(min(IntegerNumber, 256), 1);
+                                    PVS_Search.SetTransTableSize(IntegerNumber);
+                                    end;
+                                  end
+
+                                else if Lexer.FTokenKind = tok_ClearHash then
+                                  begin
+                                  PVS_Search.ClearTranspositionTable;             // option name Clear Hash type button
+                                  end;
+                                end;
+
+                              if Lexer.FTokenKind = tok_Threads then              // option name Threads type spin default 4 min 1 max 16
+                                begin
+                                Lexer.GetNextToken;
+                                if Lexer.FTokenKind = tok_value then
+                                  begin
+                                  Lexer.GetNextToken;
+                                  if Lexer.FTokenKind = tok_number then
+                                    begin
+                                    IntegerNumber := strToInt(Lexer.FToken);
+                                    IntegerNumber := max(min(IntegerNumber, 16), 1);
+
+                                    PVS_Search.SetThreadCount(IntegerNumber);
+                                    end;
+                                  end;
+                                end;
+
+                              if Lexer.FTokenKind = tok_OwnBook then              // option name OwnBook type check default true
+                                begin
+                                Lexer.GetNextToken;
+                                if Lexer.FTokenKind = tok_value then
+                                  begin
+                                  Lexer.GetNextToken;
+                                  if Lexer.FTokenKind = tok_true then
+                                    PVS_Search.UseOwnBook := true
+                                   else if Lexer.FTokenKind = tok_false then
+                                    PVS_Search.UseOwnBook := false;
+                                  end;
+                                end;
+
+                              if Lexer.FTokenKind = tok_EngineAbout then          // option name UCI_EngineAbout type string default "Current Name, Current Version by Author"
+                                begin
+                                Writeln(output, AnsiString(' '));
+                                Writeln(output, AnsiString(CurrentName + ' ' + CurrentVersion + ' by ' + Author));
+                                end;
+
+                              end;
+                            end;
+
+            tok_stop : HaltSearch(PVS_Search);
+
+            tok_quit : Quit := true;
+
+           else
+            begin
+            Writeln(output, AnsiString('Unknown Command'));
+            flush(output);
+            end;
           end;
-        end;
 
+        end;
       end;
 
     finally

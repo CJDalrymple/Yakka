@@ -28,6 +28,7 @@ interface
 
 uses
   Winapi.Windows, SysUtils, System.SyncObjs, System.Classes, Math, Threading, Diagnostics,
+
   Common, GameDef, Eval, Openbook;
 
   {$IF defined(MSWINDOWS)}
@@ -35,8 +36,6 @@ uses
   {$ENDIF}
 
 const
-
-  ThreadDebugInfo = false;
 
   ADVAPI32    = 'advapi32.dll';
 
@@ -52,10 +51,17 @@ const
   DoNull = true;
   OmitNull = false;
 
+  Singular = true;
+  NotSingular = false;
+
   Parallel = true;
   Sequential = false;
 
-  MaxSearchPly = 128;
+  MaxSearchPly = 63;
+  MateScoreCutoff = ScoreMaxValue - MaxSearchPly * 4;
+
+  TimeLimit_Max = Int64($4000000000);    // 2^38       to prevent overflow when calculating tick limit
+  NodeLimit_Max = Int64($4000000000);    // 2^38
 
               // MVV             LVA
               // captured piece, piece
@@ -82,10 +88,14 @@ type
 
 
 type
-  TPVRec = record
-    UID : UInt64;
-    MoveList : TMoveArray;
-  end;
+  TUpdateRec = record
+
+    BestScore : integer;
+    BestMove : TMove;
+    BestPV : TMoveArray;
+    SelDepth : integer;
+    FirstRootMoveSearched : boolean;
+    end;
 
 
 type
@@ -130,22 +140,21 @@ type
       TableSize : UInt64;
       TableMask : UInt64;
 
-      Hit, Miss, exact : Int64;
-
-      SearchAge : Int64;  // SearchAge : [0..63]
+      SearchAge : Int64;  // SearchAge : [0..255]
 
     constructor Create;
     procedure SetTableSize(MB_Size : integer);
 
-    function Score(Info : UInt64) : integer;   inline;
-    function Source(Info : UInt64) : integer;  inline;
-    function Dest(Info : UInt64) : integer;    inline;
-    function Depth(Info : UInt64) : integer;   inline;
-    function Flag(Info : UInt64) : integer;    inline;
-    function Age(Info : UInt64) : integer;     inline;
-    function Move(Info : UInt64) : TMove;      inline;
+    function Score(Info : UInt64; ply : integer) : integer;   inline;
+    function Source(Info : UInt64) : integer;                 inline;
+    function Dest(Info : UInt64) : integer;                   inline;
+    function Depth(Info : UInt64) : integer;                  inline;
+    function Flag(Info : UInt64) : integer;                   inline;
+    function Age(Info : UInt64) : integer;                    inline;
+    function Priority(Info : UInt64) : integer;               inline;
+    function Move(Info : UInt64) : TMove;                     inline;
 
-    function PackInfo(const Move : TMove; Depth, Flag : integer) : UInt64;
+    function PackInfo(const Move : TMove; Score, Depth, Flag, Ply : integer) : UInt64;
 
     function RetrieveData(HashCode : UInt64; var Data : UInt64) : boolean;
     procedure StoreData(HashCode : UInt64; Data : UInt64);
@@ -160,12 +169,10 @@ type
 type
   THistoryTable = record
     var
-      Table : array[1..6, 0..63] of integer;
-      CheckTable : array[1..6, 0..63] of integer;
-
+      Table : array[0..1, 1..6, 0..63] of integer;
       IsEmpty : boolean;
 
-    procedure Update(const Move : TMove; Adjustment : integer);
+    procedure Update(Player : integer; const Move : TMove; Adjustment : integer);
     procedure ClearTable;
     procedure DampTable;
     end;
@@ -214,7 +221,7 @@ type
    selDepth : integer;
    nodes : UInt64;
    time : UInt64;
-   PV : TPVArray;
+   PV : TMoveArray;
    Score : integer;
    ScoreType : integer;
    MessageOut : string;
@@ -233,8 +240,7 @@ type
       RepTable : TRepList;
       SignatureList : TSignatureList;
 
-      WhiteHistory : THistoryTable;
-      BlackHistory : THistoryTable;
+      QuietHistory : THistoryTable;
 
       WhiteCounterMove : TCounterMoveTable;
       BlackCounterMove : TCounterMoveTable;
@@ -242,7 +248,9 @@ type
       KillerMoveA : TKillerMoveTable;
       KillerMoveB : TKillerMoveTable;
 
-      StartTickCount : UInt64;
+      StartTick : Int64;
+      TickFrequency : Int64;
+      TickLimit : Int64;
 
       Searching : Boolean;
       Stop : Boolean;
@@ -252,20 +260,13 @@ type
       // Search Information
 
       NodeCount : Int64;
-      QNodeCount : Int64;
-      SearchTime : UInt64;
-      selDepth : integer;
+      SearchTime_ms : Int64;
 
       // Search Parameters
 
-      TimeRemaining_White : UInt64;           // UCI:   wtime <x> white has x msec left on the clock
-      TimeRemaining_Black : UInt64;           // UCI:   btime <x> black has x msec left on the clock
-      TimeIncrementPerMove_White : UInt64;    // UCI:   winc <x> white time increment per move in msec if x>0
-      TimeIncrementPerMove_Black : UInt64;    // UCI:   binc <x> black time increment per move in msec if x>0
-      MovesToGo :  UInt64;                    // UCI:   movestogo <x> therre are x moves until the next time control if x>0 (only sent if x>0)
-
-      TimeLimit : UInt64;                     // if time control then to calculate based on remaing time and estimated remaining moves
-      NodeLimit : UInt64;                     // UCI:   nodes <x> search x nodes only
+      TimeLimit : Int64;                      // if time control then to calculate based on remaing time and estimated remaining moves
+      HardTimeLimit : Int64;
+      NodeLimit : Int64;                      // UCI:   nodes <x> search x nodes only
       DepthLimit : integer;                   // UCI:   depth <x> search x plies only
       ThreadCount : integer;                  // UCI:   option name Threads type spin default 1 min 1 max 32
 
@@ -274,7 +275,6 @@ type
       DoProgressUpdates : boolean;
       DoParallelSearch : boolean;
       DoAspirationSearch : boolean;
-      DoSearchExtension : boolean;
       UseOwnBook : boolean;
 
       // Search Outcome
@@ -305,11 +305,13 @@ type
       procedure ClearTranspositionTable;
       procedure Clear_ABDADA_Table;
       procedure LoadSignatureList(const Board : TBoard; const GameMoveList : TGameMoveList);
-      procedure CalcTimeLimit(const Board : TBoard);
 
      public
       property OnSearchFinished: TSearchFinishedProc read FOnSearchFinished write FOnSearchFinished;
       property OnProgressUpdate: TNotifyEvent read FOnSearchProgressUpdate write FOnSearchProgressUpdate;
+
+      function GetElapsedTicks : Int64;
+      function GetElapsedMilliseconds : Int64;
 
       procedure StopSearch;
       procedure Shutdown;
@@ -321,8 +323,16 @@ type
 type
   TSearchPtr = ^TSearch;
 
-procedure RateMovesQ(MoveCount : integer; var moves : TMoveArray);
-procedure SortMoves(count : integer; var moves : TMoveArray);
+procedure RateMovesQ(var moves : TMoveArray);
+procedure SortMoves(var moves : TMoveArray);
+
+function UInt64ToDouble(value : UInt64) : double;
+
+function ExtendedTime(TimeLimit, HardLimit : UInt64) : UInt64;
+function AllocateTimeForSearch_Alt(MovesToGo, TimeRemaining, Increment, MoveNumber : UInt64) : UInt64;
+
+function IsMateScore(Score : integer) : boolean;
+
 
 implementation
 
@@ -347,8 +357,8 @@ var
   //                     :   bits 16..19   :  Captured Piece Type
   //                     :   bits 20..23   :  Promoted Piece Type
   //    Flag             :   bits 24..29   :  Castling Rights i.e. 6 bits indicating if 4 rooks & 2 kings have moved
-  //    Age              :   bits 30..35   :  Enpassant Cell
-  //    Depth            :   bits 36..42   :  Half Move Count
+  //    Depth            :   bits 30..35   :  Enpassant Cell
+  //    Age              :   bits 36..43   :  Half Move Count
   //                         bit  44       :  Used during search to track LMR candidates when moves are swapped
   //    Score            :   bits 48..63   :  Score
 
@@ -356,7 +366,6 @@ var
 constructor TTransTable.Create;
 
   begin
-
   inherited Create;
   TableSize := DefaultTableSize;
 
@@ -364,7 +373,6 @@ constructor TTransTable.Create;
   TableMask := UInt64(TableSize-2);
 
   ClearTable;
-
   end;
 
 
@@ -410,21 +418,32 @@ function TTransTable.Flag(Info : UInt64) : integer;
   end;
 
 
-function TTransTable.Age(Info : UInt64) : integer;
+function TTransTable.Depth(Info : UInt64) : integer;
   begin
   result := integer((Info shr 30) and $3F);
   end;
 
 
-function TTransTable.Depth(Info : UInt64) : integer;
+function TTransTable.Age(Info : UInt64) : integer;
   begin
   result := integer((Info shr 36) and $FF);
   end;
 
 
-function TTransTable.Score(Info : UInt64) : integer;
+function TTransTable.Priority(Info : UInt64) : integer;
+  begin
+  result := integer((Info shr 24) and $FFFFF);
+  end;
+
+
+function TTransTable.Score(Info : UInt64; Ply : integer) : integer;
   begin
   result := integer(Info shr 48) - ScoreOffset;
+
+  if result >= MateScoreCutoff then          // retrieving Mate score from TT, so subtract ply
+    result := result - ply
+   else if result <= -MateScoreCutoff then   // retrieving Mated score from TT, so add ply
+    result := result + ply;
   end;
 
 
@@ -434,41 +453,58 @@ function TTransTable.Move(Info : UInt64) : TMove;
   end;
 
 
-function TTransTable.PackInfo(const Move : TMove; Depth, Flag : integer) : UInt64;
+function TTransTable.PackInfo(const Move : TMove; Score, Depth, Flag, Ply : integer) : UInt64;
+  var
+    StoredScore : integer;
+
   begin
-  result := (Move and $FFFF000000FFFFFF) or (UInt64(Flag and $3F) shl 24) or (UInt64(SearchAge) shl 30) or (UInt64(Depth and $FF) shl 36);
+  storedScore := Score;
+  if score >= MateScoreCutoff then
+    storedscore := score + ply              // saving Mate score to TT, so add ply
+   else if score <= -MateScoreCutoff then
+    storedscore := score - ply;             // saving Mated score to TT, so subtract ply
+
+  storedScore := storedScore + ScoreOffset;
+
+  result := (UInt64(StoredScore and $FFFF) shl 48) or
+            (UInt64(SearchAge and $FF) shl 36) or
+            (UInt64(Depth and $3F) shl 30) or
+            (UInt64(Flag and $3F) shl 24) or
+            (Move and $0000000000FFFFFF);
   end;
 
 
 procedure TTransTable.StoreData(HashCode : UInt64; Data : UInt64);
   var
     index, UID_1, Data_1 : UInt64;
-    AgeAdj : integer;
+    Data_Score, Data1_Score : integer;
 
   begin
-  index := (HashCode and TableMask);     // index of first slot : depth preferred
+  index := (HashCode and TableMask);     // index of first slot
 
   UID_1 :=  Table[Index].UID;
   Data_1 := Table[Index].Data;
 
+  Data_Score :=  integer(Data shr 48) - ScoreOffset;
+  Data1_Score := integer(Data_1 shr 48) - ScoreOffset;
+
   if (UID_1 xor Data_1) = HashCode then
     begin
-    if (Data and UInt64($FFFFFF)) = 0 then             // if Data does't have move then keep previous move
+    if (Data and UInt64($FFFFFF)) = 0 then             // if new Data doesn't have a move, then keep previous move
       Data := Data or (Data_1 and UInt64($FFFFFF));
 
     if Depth(Data_1) = Depth(Data) then
       begin
-      if ((Score(Data) > Score(Data_1)) and (Flag(Data) <> ftUpperbound)) or
-         ((Score(Data) < Score(Data_1)) and (Flag(Data) <> ftLowerbound)) or
-         ((Score(Data) >= MateScore - MaxSearchPly) and (Score(Data) > Score(Data_1))) then
+      if ((Data_Score > Data1_Score) and (Flag(Data) <> ftUpperbound)) or
+         ((Data_Score < Data1_Score) and (Flag(Data) <> ftLowerbound)) or
+         ((Data_Score >= MateScoreCutoff) and (Data_Score > Data1_Score)) then
+            begin
+            Table[index].UID := HashCode xor Data;
+            Table[index].Data := Data;
+            exit;
+            end;
 
-        begin
-        Table[index].UID := HashCode xor Data;
-        Table[index].Data := Data;
-        exit;
-        end;
-
-      if Score(Data) = Score(Data_1) then
+      if Data_Score = Data1_Score then
         begin
         if Flag(Data) <> Flag(Data_1) then
           Data := (Data and $FFFFFFFFC0FFFFFF) or (UInt64(ftExact and $3F) shl 24);
@@ -479,17 +515,17 @@ procedure TTransTable.StoreData(HashCode : UInt64; Data : UInt64);
       end;
     end;
 
-  AgeAdj := Age(Data) - Age(Data_1);
-  AgeAdj := AgeAdj + (AgeAdj and $40);       // always > 0 if Data younger than Data_1, even with wrap-around of age from 63 back to 0
-
-  if (Depth(Data_1) <= Depth(Data) + 4 * AgeAdj) or ((Score(Data) >= MateScore - MaxSearchPly) and (Score(Data) > Score(Data_1))) then
+  if (Priority(Data_1) < Priority(Data)) or ((abs(Data_Score) >= MateScoreCutoff) and (Data_Score > Data1_Score)) then
     begin
     Table[index].UID := HashCode xor Data;
     Table[index].Data := Data;
     exit
     end;
 
-  inc(index);         // index of second slot : always replace
+  if (UID_1 xor Data_1) = HashCode then        // don't overwrite a better entry so exit
+    exit;
+
+  inc(index);      // index of second slot : always replace
 
   Table[index].UID := HashCode xor Data;
   Table[index].Data := Data;
@@ -531,17 +567,13 @@ procedure TTransTable.ClearTable;
     Table[i].UID := InvalidBoard;
     Table[i].Data := 0;
     end;
-
-  Miss := 0;
-  Hit := 0;
-  Exact := 0;
   end;
 
 
 procedure TTransTable.NewSearch;
   begin
   inc(SearchAge);
-  SearchAge := SearchAge and $3F;
+  SearchAge := SearchAge and $FF;
   end;
 
 
@@ -564,18 +596,17 @@ function TTransTable.FillPermill : integer;
   begin
   FillCount := 0;
 
-  for i := 0 to 2047 do
+  for i := 0 to 1023 do
     if Age(Table[i].Data) = SearchAge then
       inc(FillCount);
 
-  result := (FillCount * 1000) div 2048;
+  result := (FillCount * 1000) div 1024;
   end;
 
 
 // History Table ===============================================================
 
-
-procedure THistoryTable.Update(const Move : TMove; Adjustment : integer);
+procedure THistoryTable.Update(Player : integer; const Move : TMove; Adjustment : integer);
   var
     Piece, Dest : integer;
 
@@ -584,30 +615,32 @@ procedure THistoryTable.Update(const Move : TMove; Adjustment : integer);
   Piece := (Move shr 12) and $F;
   Dest :=  (Move shr 6) and $3F;
 
-  Table[Piece, Dest] := Table[Piece, Dest] + ((32768 - abs(Table[Piece, Dest])) * Adjustment) div 32768;
+  Table[Player, Piece, Dest] := Table[Player, Piece, Dest] + ((32768 - abs(Table[Player, Piece, Dest])) * Adjustment) div 32768;
   end;
 
 
 procedure THistoryTable.ClearTable;
   var
-    Piece, Dest : integer;
+    Player, Piece, Dest : integer;
 
   begin
   IsEmpty := true;
-  for Piece := 1 to 6 do
-    for Dest := 0 to 63 do
-      Table[Piece, Dest] := 0;
+  for Player := 0 to 1 do
+    for Piece := 1 to 6 do
+      for Dest := 0 to 63 do
+        Table[Player, Piece, Dest] := 0;
   end;
 
 
 procedure THistoryTable.DampTable;
   var
-    Piece, Dest : integer;
+    Player, Piece, Dest : integer;
 
   begin
-  for Piece := 1 to 6 do
-    for Dest := 0 to 63 do
-      Table[Piece, Dest] := Table[Piece, Dest] div 2 ;
+  for Player := 0 to 1 do
+    for Piece := 1 to 6 do
+      for Dest := 0 to 63 do
+        Table[Player, Piece, Dest] := Table[Player, Piece, Dest] div 2 ;
   end;
 
 
@@ -657,11 +690,11 @@ procedure TCounterMoveTable.ClearTable;
   end;
 
 
-
 //  T_ABDADA_Table ===================================================================
 
 //  Hash table to track position being searched
 //  To minimize different threads searching same position
+
 
 procedure T_ABDADA_Table.MoveSearchBegin(MoveHash : UInt64);
   var
@@ -719,7 +752,6 @@ procedure T_ThreadData.Reset;
     i : integer;
 
   begin
-
   for i := low(KillerMoveA) to high(KillerMoveA) do
     KillerMoveA[i] := 0;
   for i := low(KillerMoveB) to high(KillerMoveB) do
@@ -730,8 +762,6 @@ procedure T_ThreadData.Reset;
   SearchTime := 0;
   SelDepth := 0;
   ID := 0;
-
-  FirstRootMoveSearched := false;
   end;
 
 
@@ -793,31 +823,35 @@ function TGameMoveList.RemoveLastMove : TMove;
 
 // Misc Procedures =============================================================
 
+{$IFDEF CONSOLE}
 procedure WriteConsoleString(const S: string);
   var
     temp: Cardinal;
     tempstr : string;
-
   begin
-  if S <> '' then
-    begin
-    tempstr := S + #13#10;
-    WriteConsole(GetStdHandle(STD_OUTPUT_HANDLE), @tempstr[1], Length(tempstr),
-      temp, nil);
-    end;
+    if S <> '' then
+      begin
+      tempstr := S + #13#10;
+      WriteConsole(GetStdHandle(STD_OUTPUT_HANDLE), @tempstr[1], Length(tempstr),
+        temp, nil);
+      end;
   end;
+{$ENDIF}
 
 
-procedure RateMovesQ(MoveCount : integer; var moves : TMoveArray);
+
+procedure RateMovesQ(var moves : TMoveArray);
   var
     i : integer;
     score, capturedpiece, piece : integer;
 
   begin
-  for i := 1 to MoveCount do
+  for i := 1 to Moves[0] do
     begin
     Piece := (Moves[i] shr 12) and $F;
     CapturedPiece := (Moves[i] shr 16) and $F;
+
+  //  score:= 64 + CapturedPiece * 64 - piece;
 
     score:= 8 + CapturedPiece * 8 - piece;
     moves[i] := moves[i] and UInt64($0000FFFFFFFFFFFF) xor UInt64(Score and $FFFF) shl 48;
@@ -839,97 +873,57 @@ procedure RateMovesQ(MoveCount : integer; var moves : TMoveArray);
 procedure RateMoves(Search : TSearchPtr; var Board : TBoard; Player, MoveCount : integer; var moves : TMoveArray);
   var
     i : integer;
-    score, piece, promotionpiece, capturedpiece, temp, Dest : integer;
+    score, piece, promotionpiece, capturedpiece, SEE_value, Dest : integer;
 
   begin
-  if Player = white then
-    for i := 1 to MoveCount do
+  for i := 1 to MoveCount do
+    begin
+    Piece := (Moves[i] shr 12) and $F;
+    CapturedPiece := (Moves[i] shr 16) and $F;
+    PromotionPiece := (Moves[i] shr 20) and $F;
+
+    if CapturedPiece > 0 then
       begin
+      score := MVV_LVA_Lookup[capturedpiece, Piece] + $7000;
 
-      Piece := (Moves[i] shr 12) and $F;
-      CapturedPiece := (Moves[i] shr 16) and $F;
-      PromotionPiece := (Moves[i] shr 20) and $F;
-
-      if CapturedPiece > 0 then
+      if PieceValue[Piece] > PieceValue[CapturedPiece] then
         begin
-        score := MVV_LVA_Lookup[capturedpiece, Piece] + $7000;
+        Board.MakeMoveNoHash(Moves[i]);
+        SEE_value :=  PieceValue[CapturedPiece] - Board.SEE(Moves[i]);
+        Board.UndoMoveNoHash(Moves[i]);
 
-        if PieceValue[Piece] > PieceValue[CapturedPiece] then
-          begin
-          Board.MakeMoveNoHash(Moves[i]);
-          temp :=  PieceValue[CapturedPiece] - Board.SEE(Moves[i]);
-          Board.UndoMoveNoHash(Moves[i]);
-
-          if temp < 0 then
-            score := temp + $1000;      //  losing capture
-          end;
-        end
-       else
-        begin
-        Dest := (moves[i] shr 6) and $3F;
-        score := search.WhiteHistory.Table[Piece, Dest] div 4 + $2000;    // ensure score not -ve
+        if SEE_value < 0 then
+          score := SEE_value + $1000;      //  losing capture
         end;
-
-      if (PromotionPiece > 0) and (score < $7000) then
-        begin
-        if PromotionPiece = 5 then
-          score := $6000
-         else
-          score := $4000;
-        end;
-
-      moves[i] := moves[i] and UInt64($0000FFFFFFFFFFFF) xor (UInt64(Score and $FFFF) shl 48);
       end
-   else
-    for i := 1 to MoveCount do
+     else
       begin
-      Piece := (Moves[i] shr 12) and $F;
-      CapturedPiece := (Moves[i] shr 16) and $F;
-      PromotionPiece := (Moves[i] shr 20) and $F;
-
-      if CapturedPiece > 0 then
-        begin
-        score := MVV_LVA_Lookup[Capturedpiece, Piece] + $7000;
-
-        if PieceValue[Piece] > PieceValue[CapturedPiece] then
-          begin
-          Board.MakeMoveNoHash(Moves[i]);
-          temp :=  PieceValue[CapturedPiece] - Board.SEE(Moves[i]);
-          Board.UndoMoveNoHash(Moves[i]);
-
-          if temp < 0 then
-            score := temp + $1000;     //  losing capture
-          end;
-        end
-       else
-        begin
-        Dest := (moves[i] shr 6) and $3F;
-        score := search.BlackHistory.Table[piece, Dest] div 4 + $2000;     // ensure score not -ve
-        end;
-
-      if (PromotionPiece > 0) and (score < $7000) then
-        begin
-        if PromotionPiece = 5 then
-          score := $6000
-         else
-          score := $4000;
-        end;
-
-      moves[i] := moves[i] and UInt64($0000FFFFFFFFFFFF) xor (UInt64(Score and $FFFF) shl 48);
+      Dest := (moves[i] shr 6) and $3F;
+      score := search.QuietHistory.Table[Board.ToPlay, Piece, Dest] div 4 + $2000;    // ensure score not -ve
       end;
+
+    if (PromotionPiece > 0) and (score < $7000) then
+      begin
+      if PromotionPiece = 5 then
+        score := $6000
+       else
+        score := $4000;
+      end;
+
+    moves[i] := moves[i] and UInt64($0000FFFFFFFFFFFF) xor (UInt64(Score and $FFFF) shl 48);
+    end;
   end;
 
 
-procedure SortMoves(count : integer; var moves : TMoveArray);
-
-  //insertion sort
-
+procedure SortMoves(var moves : TMoveArray);
   var
     i, j : integer;
     temp : TMove;
 
   begin
-  for i := 2 to count do
+  //insertion sort
+
+  for i := 2 to Moves[0] do
     begin
     temp := Moves[i];
 
@@ -948,52 +942,51 @@ procedure SortMoves(count : integer; var moves : TMoveArray);
   end;
 
 
+function IsMateScore(Score : integer) : boolean;
+  begin
+  result := Abs(score) >= MateScoreCutoff;
+  end;
 
-function PVS_Q(Search : TSearchPtr; ply, alpha, beta, CheckCount: Integer; PrevInCheck : boolean; var Board : TBoard; PrevMove : TMove): integer;
+
+function PVS_Q(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, alpha, beta, CheckCount: Integer; var Board : TBoard): integer;
+
   var
     k : integer;
-    value  : integer;
+    value, SEE_value, Standpat  : integer;
     Moves : TMoveArray;
     Movecount : integer;
-    temp : integer;
     ChecksRemaining :integer;
-    InCheckFlag : boolean;
-
+    InCheck : boolean;
+    Move : TMove;
     piece, capturedpiece : integer;
 
   begin
-  if (GetTickCount64 - Search.StartTickCount) >= (Search.TimeLimit - 8) then
-    Search.Stop := true;
-
   if Search.Stop = true then
     exit(InvalidScore);
 
-  if ply > Search.SelDepth then
-    Search.SelDepth := ply;
+  if ply > ThreadData.SelDepth then
+    ThreadData.SelDepth := ply;
 
-  InCheckFlag := Board.KingInCheck(Board.ToPlay);
+  // Mate Distance Pruning
 
-  if not InCheckFlag then        // StandPat TODO : check if not in zugzwang
+  alpha := max(alpha, ScoreMinValue + ply + 1);
+  beta := min(beta, ScoreMaxValue - ply);
+  if alpha >= beta then
+    exit(alpha);
+
+  InCheck := Board.KingInCheck(Board.ToPlay);
+
+  if not InCheck then
     begin
-    value := ScoreFromBoard(Board);
+    Standpat := ScoreFromBoard(Board);
 
-    if value >= beta then
-      exit(value);
+    if Standpat >= beta then
+      exit(beta);
 
-    CapturedPiece := integer((PrevMove shr 16) and $F);
-    Piece :=  integer((PrevMove shr 12) and $F);
-
-    if alpha < value then
-      alpha := value;
-
-    if (PrevInCheck = false) and (Piece > CapturedPiece) and (CapturedPiece > 0) then
-      begin
-      temp :=  PieceValue[CapturedPiece] - Board.SEE(PrevMove);
-
-      if temp < 0 then
-        exit(beta);         // losing move so prune it, but only if not in check, and if it doesn't give check
-      end;
+    if Standpat > alpha then
+      alpha := Standpat;
     end;
+
 
   // Get Moves to investigate
 
@@ -1001,7 +994,7 @@ function PVS_Q(Search : TSearchPtr; ply, alpha, beta, CheckCount: Integer; PrevI
 
   ChecksRemaining := CheckCount;
 
-  if InCheckFlag = true then
+  if InCheck then
     movecount := Board.GetAllValidMoves(Board.ToPlay, Moves, false)   // When the king is in check, all moves are generated and searched.
    else
     begin
@@ -1014,38 +1007,62 @@ function PVS_Q(Search : TSearchPtr; ply, alpha, beta, CheckCount: Integer; PrevI
       end;
     end;
 
-  //  Evaluate
-
   if movecount = 0 then
     begin
-    if InCheckFlag = true then    // this position is checkmate, but may not be a forced mate if quiet moves were not considered in one or more ancestor nodes
-      exit(-10_000 + ply)
+    if InCheck then    // this position is checkmate
+      exit(ScoreMinValue + ply)
      else
       exit(alpha);     // no more violent moves left
     end;
 
   if movecount > 1 then
     begin
-    RateMovesQ(movecount, Moves);
-    SortMoves(movecount, Moves);
+    RateMovesQ(Moves);
+    SortMoves(Moves);
     end;
 
   // Search
 
   for k := 1 to movecount do
     begin
-    Board.MakeMove(Moves[k]);
-    value := -PVS_Q(search, ply+1, -beta, -alpha, ChecksRemaining, InCheckFlag, Board, Moves[k]);
-    Board.UndoMove(Moves[k]);
+    Move := Moves[k];
+    Board.MakeMove(Move);
+    Inc(ThreadData.NodeCount);
+
+    CapturedPiece := integer((Move shr 16) and $F);
+    Piece :=  integer((Move shr 12) and $F);
+
+    if (InCheck = false) and (PieceValue[Piece] >= PieceValue[CapturedPiece]) and (CapturedPiece > 0) then
+      begin
+      SEE_value :=  PieceValue[CapturedPiece] - Board.SEE(Move);
+
+      if SEE_value < 0 then     // losing move so prune it, but only if not in check, and if it doesn't give check
+        begin
+        Board.UndoMove(Move);
+        continue;
+        end;
+
+      // Prune neutral captures when static eval is low
+
+      if (SEE_value = 0) and (Standpat + 200 <= alpha) then
+        begin
+        Board.UndoMove(Move);
+        continue;
+        end;
+      end;
+
+    value := -PVS_Q(search, threadData, ply+1, -beta, -alpha, ChecksRemaining, Board);
+
+    Board.UndoMove(Move);
 
     if value = - InvalidScore then
       exit(InvalidScore);
 
+    if value > alpha then
+      alpha := value;
+
     if value >= beta then
       exit(value);
-
-    if value > alpha then
-     alpha := value;
     end;
 
   result := alpha;
@@ -1053,111 +1070,119 @@ function PVS_Q(Search : TSearchPtr; ply, alpha, beta, CheckCount: Integer; PrevI
 
 
 function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, depth, alpha, beta, NodeType : Integer;
-               var Board : TBoard; var PV : TPVArray;
-               var RepList : TRepList; NullMove : boolean; PrevMove : TMove) : integer;
+               var Board : TBoard; var PV : TMoveArray;
+               var RepList : TRepList; NullMove : boolean; PrevMove : TMove; SingularFlag : Boolean) : integer;
   const
     R_IID = 3;
     R = 3;
     R_Null = 3;
     Rn = 3;
-    CC = 2;
-    MM = 6;
-
-    ETC_Limit = 6;
 
   var
     i, j, k, f : integer;
-    value, Flag, alphaOrig, temp, score : integer;
+    value, TTFlag, alphaOrig, LocalEval : integer;
     Move, KillerMove, BestMove, CounterMove, TempMove, TTMove : TMove;
     Moves : TMoveArray;
-    Movecount : integer;
+    Movecount, QuietsTried : integer;
     HashCode, TT_Data, MoveHash : UInt64;
     TempEp : UInt64;
-    DataExists, HashMove, InCheck : boolean;
-    PV1, PVdummy : TPVArray;
-    NewNodetype, c, m, epCell : integer;
+    DataExists, HashMove, InCheck, IsRoot, IsPV : boolean;
+    PV1, PVdummy : TMoveArray;
+    NewNodetype, c, m, epCell, piece : integer;
     Best, NewDepth : integer;
     HalfCount : integer;
     LMR_Flag, ThreatDetected, TT_OKtoStore : boolean;
-    ReductionLimit, FullDepthMoves, LMR : integer;
+    FullDepthMoves, LMR, SEE_Value: integer;
+    sDepth, sValue, sBeta, sExtension, TTScore, TTDepth  : integer;
+    NowTick, ElapsedTicks : Int64;
 
   begin
-  if (GetTickCount64 - Search.StartTickCount) >= (Search.TimeLimit - 8) then
+  QueryPerformanceCounter(NowTick);
+
+  if NowTick > Search.StartTick then
+    ElapsedTicks := NowTick - Search.StartTick
+   else
+    ElapsedTicks := High(Int64) - Search.StartTick + NowTick;
+
+  if ElapsedTicks > Search.TickLimit then
+    begin
     Search.Stop := true;
+    exit(InvalidScore);
+    end;
 
   if Search.NodeCount >= Search.NodeLimit then
+    begin
     Search.Stop := true;
-
-  if Search.Stop then
     exit(InvalidScore);
-
-  Inc(ThreadData.NodeCount);
-
-  // Check for immediate win or stalemate
-
-  if Board.MoveExists(InCheck) = false then         // also sets value of InCheck for use later in this routine
-    begin
-    PV[0] := 0;
-    if InCheck = true then
-      exit(-MateScore + ply)       // checkmate
-     else
-      exit(0);                     // stalemate
     end;
 
+  IsRoot := (ply = 0);
+  IsPV := (alpha + 1 <> beta);
 
-  if (Board.HalfCount >= 100) and (ply > 0) then    // if Board.HalfCount = 100 and ply = 0 then need to return a valid move so continue
-    begin
-    PV[0] := 0;
-    exit(RepetitionFound);                          // Draw by 50 move rule, return RepetitionFound so not stored in TT
-    end;
+  PV[0] := 0;
 
-  if depth <> 0 then
-    DataExists := Search.TransTable.RetrieveData(Board.Hash, TT_Data);
-
+  if (Board.HalfCount >= 100) and not IsRoot then    // if Board.HalfCount = 100 and ply = 0 then need to return a valid move so continue
+    exit(RepetitionFound);                           // Draw by 50 move rule, return RepetitionFound so not stored in TT
 
   //  Check for repetition & if so score this position as draw
 
   HalfCount := Board.HalfCount;
 
   if ply >= 4 then
-    begin
     for i := (ply - 4) downto max(ply - HalfCount, 0) do
       if Board.Hash = RepList[i] then                           // RepList[0] = hash of board at ply = 0
-        begin                                                   // RepList[1] = hash of board at ply = 1 etc.
-        PV[0] := 0;
-        exit(RepetitionFound);
-        end;
-    end;
+        exit(RepetitionFound);                                  // RepList[1] = hash of board at ply = 1 etc.
 
-  if (HalfCount > ply) and (ply > 0) then                               // if ply = 0 then need to return a valid move so continue
+
+  if (HalfCount > ply) and not IsRoot then                            // if ply = 0 then need to return a valid move so continue
     for i := 1 to min(HalfCount - ply, search.SignatureList[0]) do      // search.SignatureList[0] contains count of valid historical entries in Table
       if Board.Hash = search.SignatureList[i] then                      // search.SignatureList[1] = Hash of Board at ply = -1
-        begin
-        PV[0] := 0;
         exit(RepetitionFound);
-        end;
+
+
+  // Mate distance pruning - this is important as it ensures abs(score) <= ScoreMaxValue and hence avoids
+  // problem in overflowing score value when packing into move, TT etc.
+
+
+  if not IsRoot then
+    begin
+    alpha := max(alpha, ScoreMinValue + ply + 1);
+    beta := min(beta, ScoreMaxValue - ply);
+    if alpha >= beta then
+      exit(alpha);
+    end;
+
+
+  // protect PV from overflow
+
+  if ply = MaxSearchPly then
+    exit(ScoreFromBoard(Board));
+
+  InCheck := Board.KingInCheck(Board.ToPlay);
+
+  // do depth extension before probing TT to ensure consistency when setting alpha & avoid bug in search
+  if (InCheck and (Depth < 2)) or (((PrevMove shr 20) and $F) <> 0) then    // PrevMove.PromotionPiece
+    depth := depth + 1;
 
 
   //  Evaluate if leaf node
 
   if depth = 0 then
     begin
-    value := PVS_Q(search, ply, alpha, beta, 2, InCheck, Board, PrevMove);
-
-    if ply > ThreadData.SelDepth then
-      ThreadData.SelDepth := ply;
+    value := PVS_Q(search, ThreadData, ply, alpha, beta, 2, Board);    // must be min 2 or gives errors
 
     if Search.Stop then
       exit(InvalidScore);
 
-    PV[0] := 0;
     exit(Value) ;
     end;
 
 
   // Check transposition table
 
-  Best := ScoreMinValue;
+  DataExists := Search.TransTable.RetrieveData(Board.Hash, TT_Data);
+
+  Best := InvalidScore;
   BestMove := 0;
   alphaOrig := alpha;
   BestMove := 0;
@@ -1170,69 +1195,65 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
   if DataExists = true then
     begin
     TTMove := search.TransTable.Move(TT_Data);
-    if Search.TransTable.Depth(TT_Data) >= depth then
+    TTScore := Search.TransTable.Score(TT_Data, ply);
+    TTDepth := Search.TransTable.Depth(TT_Data);
+    TTFlag := Search.TransTable.Flag(TT_Data);
+
+    if not IsPV and ((TTDepth >= depth) or (abs(TTscore) >= MateScoreCutoff)) then
       begin
-      PV[0] := 0;
-      Flag := Search.TransTable.Flag(TT_Data);
-      value := Search.TransTable.Score(TT_Data);
+      if (TTFlag <> ftUpperBound) and (TTscore >= beta) then    // i.e. a lower bound or exact value above beta so can cut
+        exit(TTscore)
+       else if (TTFlag <> ftLowerBound) and (TTscore <= alpha) then   // i.e. an upper bound or exact value that is below alpha so can cut
+        exit(TTscore);
 
-      if value > (MateScore - MaxSearchPly) then
-          value := value - ply                          // retrieving from TT, so subtract ply
-       else if value < -(MateScore - MaxSearchPly) then
-          value := value + ply;                          // retrieving from TT, so add ply
-
-      if (Flag = ftLowerBound) and (value >= beta) then
-        exit(value)
-       else if (Flag = ftUpperBound) and (value <= alpha) then
-        exit(value)
-       else if (Flag = ftExact) and (value < beta) and (value > alpha) then
-        alpha := value;
-
-      if (flag = ftUpperBound) and (depth - R_Null - depth div 4 <= Search.TransTable.Depth(TT_Data)) and (value < Beta) then
+      if (TTFlag = ftUpperBound) and (TTscore < Beta) and (depth - R_Null - depth div 4 <= TTDepth)  then
         NullMove := OmitNull;
       end;
     end;
 
 
-  // Reverse Futility Pruning
-
-  // if your score is so good you can take a big hit and still get the beta cutoff, go for it
-
-  if (depth = 1) and (NodeType <> PV_Node) and (not InCheck) and (ply > 0) then
+  if (depth <= 2) and not (IsPV or InCheck or IsRoot) then
     begin
-    temp := ScoreFromBoard(Board);
+    LocalEval := ScoreFromBoard(Board);
 
-    if (temp - 160) >= Beta then         //   160  approx value of strong pawn
-      begin
-      PV[0] := 0;
-      exit(temp - 160);
-      end;
+    // Reverse Futility Pruning
+    if (depth = 1) and ((LocalEval - 160) >= Beta) then        //   160  approx value of strong pawn
+      exit(LocalEval - 160);
+
+    if (depth = 2) and ((LocalEval - 320) >= Beta) then        //    320  approx value of minor
+      depth := depth - 1;
+
+    // razoring
+    if LocalEval <= alpha - 120 * depth then                    // quiet move score likely to be less than 120 improvement
+       exit(PVS_Q(search, ThreadData, ply, alpha, beta, 2, Board));
     end;
 
-
-  if (depth = 2) and (NodeType <> PV_Node) and (not InCheck) and (ply > 0) then
-    begin
-    temp := ScoreFromBoard(Board);
-
-    if (temp - 320) >= Beta then     //    320  approx value of minor
-      depth := 1;                    //    i.e. depth := depth - 1
-    end;
 
   movecount := Board.GetAllValidMoves(Board.ToPlay, Moves, false);
 
 
+  // Check for immediate win or stalemate
+
+  if movecount = 0 then
+    begin
+    if InCheck = true then
+      exit(ScoreMinValue + ply)    // checkmate
+     else
+      exit(0);                     // stalemate
+    end;
+
+
   // Recursive Null Move forward pruning
 
-  ThreatDetected := false;
+  ThreatDetected := InCheck;
 
-  if (NullMove = DoNull) and (depth > 2) and (Beta < MateScore - ply) and (movecount > 4) and (ply > 0) then
-    if not InCheck and (NodeType <> PV_Node) and not Board.OnlyPawns then
+  if (NullMove = DoNull) and (depth > 2) and (movecount > 4) and not (ThreatDetected or IsRoot or IsPV) then
+    if not Board.PawnsOnly(Board.ToPlay) then
       begin
       value := ScoreFromBoard(Board);
 
       if value >= beta then
         begin
-
         PVdummy[0] := 0;
         epCell := -1;
 
@@ -1254,7 +1275,7 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
          else
           NewNodetype := CUT_Node;
 
-        value := -PVS_ABDADA(search, ThreadData, ply+1, max(depth - R_Null - depth div 4, 1), -beta, -beta+1, NewNodetype, Board, PVdummy, RepList, OmitNull, 0);
+        value := -PVS_ABDADA(search, ThreadData, ply+1, max(depth - R_Null - depth div 4, 1), -beta, -beta+1, NewNodetype, Board, PVdummy, RepList, OmitNull, 0, SingularFlag);
 
         if Search.Stop then
           exit(InvalidScore);
@@ -1265,9 +1286,9 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
         if value = -RepetitionFound then
           value := 0;
 
-        if value < beta  then
-          if -PVS_ABDADA(search, ThreadData, ply, max(depth - R_Null - depth div 4,  1), -beta, -alpha, Cut_Node, Board, PVdummy, RepList, OmitNull, PrevMove) + 320 < alpha then
-            ThreatDetected := true;
+        {if value < beta  then
+          if -PVS_ABDADA(search, ThreadData, ply, max(depth - R_Null - depth div 4,  1), -beta, -alpha, Cut_Node, Board, PVdummy, RepList, OmitNull, PrevMove, SingularFlag) + 320 < alpha then
+            ThreatDetected := true;  }
 
         Board.ToPlay := 1 - Board.ToPlay;
         Board.Hash := Board.Hash xor Board.PlayerHash;
@@ -1279,43 +1300,25 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
           Board.Enpassant := tempEp;
           end;
 
-        if value >= beta then                        // verify in case zugzwang, adds approx 10% to search time but avoids at least some errors
-          if (depth > 4) or (depth > ply) then       // suggestion is don't do verification at lower depths
+
+        if (value >= beta) and (abs(value) < MateScoreCutoff) then           // verify in case zugzwang, adds approx 10% to search time but avoids at least some errors
+          if (depth > 4) or (depth > ply) then                               // suggestion is don't do verification at lower depths
             begin
 
-            value := PVS_ABDADA(search, ThreadData, ply, max(depth - R_Null - depth div 4,  1), beta - 1, beta, Cut_Node, Board, PVdummy, RepList, OmitNull, PrevMove);
+            value := PVS_ABDADA(search, ThreadData, ply, max(depth - R_Null - depth div 4,  1), beta - 1, beta, Cut_Node, Board, PVdummy, RepList, OmitNull, PrevMove, SingularFlag);
 
             if value = InvalidScore then
               exit(InvalidScore);
-
-            if (value <> RepetitionFound) and (value >= beta) then
-              begin
-              Move := PrevMove;
-
-              if value > (MateScore - MaxSearchPly) then
-                  score := value + ply                                 // saving to TT, so add ply
-               else if value < -(MateScore - MaxSearchPly) then
-                  score := value - ply;                                // saving to TT, so subtract ply
-
-              Move := UInt64(Move and $0000FFFFFFFFFFFF) + UInt64((score + ScoreOffset) and $FFFF) shl 48;    //  Move.SetScore(value);
-
-              TT_Data := search.TransTable.PackInfo(Move, max(depth - R_Null - depth div 4, 1), ftLowerBound);
-
-              search.TransTable.StoreData(Board.Hash, TT_Data);
-              end;
 
             if value = RepetitionFound then
               value := 0;
             end;
 
-        if value >= beta then
-          begin
-          PV[0] := 0;
+        if (value >= beta) and (abs(value) < MateScoreCutoff) then
           exit(value);
-          end;
-
         end;
       end;
+
 
   RateMoves(search, Board, Board.ToPlay, movecount, Moves);
 
@@ -1362,12 +1365,13 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
           end;
     end;
 
+
   HashMove := false;
 
   if TTMove.IsValid then         // identify hash move
     begin
     for i := 1 to Movecount do
-      if (Moves[i] and $FFF) = (TTMove and $FFF) then
+      if (Moves[i] and $FFFFFF) = (TTMove and $FFFFFF) then
         begin
         Moves[i] := Moves[i] or UInt64($8000000000000000);
         HashMove := true;
@@ -1375,12 +1379,11 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
         end;
     end;
 
-  SortMoves(movecount, Moves);
-
+  SortMoves(Moves);
 
   // Enhanced Forward Pruning
 
-  if (NodeType = Cut_Node) and not InCheck and (ply > 0) then
+  if (NodeType = Cut_Node) and not (ThreatDetected or IsRoot or IsPV) then
     begin
     if depth > (R+5) then
       begin
@@ -1389,10 +1392,11 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
       c := 0;
       m := 1;
 
-      while m <= min(MM, MoveCount) do
+      while m <= min(6, MoveCount) do
         begin
         Move := Moves[m];                   // to avoid ruining move ordering info
         Board.MakeMove(Move);               // perhaps this why move picker did not provide an improvement as hoped
+        Inc(ThreadData.NodeCount);
         RepList[ply+1] := Board.Hash;
 
         NewNodetype := ALL_Node;
@@ -1400,16 +1404,9 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
         DataExists := Search.TransTable.RetrieveData(Board.Hash, TT_Data);
 
         if (DataExists = true) and (depth - R - 1 <= Search.TransTable.Depth(TT_Data)) and (Search.TransTable.Flag(TT_Data) <> ftLowerBound) then
-          begin
-          value := Search.TransTable.Score(TT_Data);
-
-          if value > (MateScore - MaxSearchPly) then
-            value := value - ply                             // retrieving from TT, so subtract ply
-           else if value < -(MateScore - MaxSearchPly) then
-            value := value + ply;                           // retrieving from TT, so add ply
-          end
+          value := Search.TransTable.Score(TT_Data, ply)
          else
-          value := -PVS_ABDADA(search, ThreadData, ply+1, depth-1-R, -beta, -beta+1, NewNodetype, Board, PVdummy, RepList, DoNull, Move);
+          value := -PVS_ABDADA(search, ThreadData, ply+1, depth-1-R, -beta, -beta+1, NewNodetype, Board, PVdummy, RepList, DoNull, Move, SingularFlag);
 
         Board.UndoMove(Move);
 
@@ -1422,10 +1419,11 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
         if value >= beta then
           begin
           inc(c);
-          if c >= CC then
+          if c >= 2 then
             begin
-            depth := depth - 2;
-            break;
+            // depth := depth - 2;
+            // break;
+            exit(beta);
             end;
           end;
 
@@ -1435,19 +1433,12 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
     end;
 
 
-  // depth extension must be done before ETC to ensure consistency when setting alpha
-
-  if Search.DoSearchExtension then
-    if (depth <= 2) and (InCheck or (PrevMove.PromotionPiece <> 0) or (MoveCount < 4)) then       // search extension
-      depth := depth + 1;
-
-
   // Enhanced Transposition Cutoff
 
-  if (NodeType <> All_Node) and (ply > 0)  then
+  if (NodeType <> All_Node) and not (IsRoot or IsPV) then
     if depth >= 2 then
       begin
-      for k := 1 to min(MoveCount, ETC_Limit) do   // Don't test all moves, just try first few
+      for k := 1 to min(MoveCount, 6) do   // Don't test all moves, just try first few
         begin
         Move := Moves[k];                          // to avoid ruining move ordering info
 
@@ -1458,29 +1449,20 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
           if search.TransTable.Depth(TT_Data) = (depth - 1) then
             if search.TransTable.Flag(TT_Data) <> ftLowerBound then
               begin
-              value := -search.TransTable.Score(TT_Data);
-
-              if value > (MateScore - MaxSearchPly) then
-                value := value - ply - 1                                // retrieving from TT, so subtract (ply + 1)
-               else if value < -(MateScore - MaxSearchPly) then
-                value := value + ply + 1;                               // retrieving from TT, so add (ply + 1)
-
-              if value >= beta then
-                begin
-                PV[0] := 0;
-                exit(value);
-                end;
+              value := -search.TransTable.Score(TT_Data, ply+1);
 
               if (search.TransTable.Flag(TT_Data) = ftExact) and (value > alpha) then
                 begin
                 alpha := value;
                 best := value;
-                bestmove := Move;
-                BestMove := UInt64(BestMove and $0000FFFFFFFFFFFF) + UInt64((value + ScoreOffset) and $FFFF) shl 48;  // set score
+                bestmove := (Move and $FFFFFF);
 
                 PV[1] := BestMove;
                 PV[0] := 1;
                 end;
+
+              if value >= beta then
+                exit(value);
               end;
           end;
         end;
@@ -1489,11 +1471,11 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
 
   //Internal Iterative Deepening
 
-  if HashMove = false then
+  if (HashMove = false) and IsPV and not IsRoot then
     if (depth - R_IID > 3) and (NullMove <> OmitNull) then
       begin
       PVdummy[0] := 0;
-      value := PVS_ABDADA(search, ThreadData, ply, depth - R_IID, alpha, beta, NodeType, Board, PVdummy, RepList, DoNull, PrevMove);
+      value := PVS_ABDADA(search, ThreadData, ply, depth - R_IID, alpha, beta, NodeType, Board, PVdummy, RepList, DoNull, PrevMove, SingularFlag);
 
       if Search.Stop then
         exit(InvalidScore);
@@ -1521,14 +1503,12 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
   // Search
 
   PV1[0] := 0;
-  ReductionLimit := 3;
 
-  if (ply > 1) and (depth > 2) and (ThreatDetected = false) then  // only undertake LMR for ply 2 and greater
+  QuietsTried := 0;
+
+  if (ply > 1) and (depth > 2) and not ThreatDetected then  // only undertake LMR for ply 2 and greater
     begin
-    FullDepthMoves := 3 + GetHighBit_Alt(ply + 1);        // GetHighBit_alt is undefined when argument = 0
-
-    if NodeType = PV_Node then                            // PV_Node - increase number of full depth moves
-      FullDepthMoves := FullDepthMoves + 4;               // FullDepthMoves + 12;
+    FullDepthMoves := 3 + GetHighBit_Alt(depth + 1);        // GetHighBit_alt is undefined when argument = 0
 
     for i := FullDepthMoves to MoveCount do               // flag potential moves for reduction
       if Moves[i] < UInt64($4000000000000000) then        // i.e. don't reduce winning captures, promotion, killer and countermoves
@@ -1537,16 +1517,12 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
 
   MoveHash := 0;
 
+  if IsRoot and (SingularFlag = false) then
+    ThreadData.FirstRootMoveSearched := false;
+
   for k := 1 to movecount do
     begin
-
-    if alpha = (MateScore - ply - 1) then         // mate distance pruning
-      exit(alpha);
-
-    if (k = 1) and (ply = 0) then
-      ThreadData.FirstRootMoveSearched := false;
-
-    if (depth > 2) and (k > 1) then                       // no need to do this if it is first move in list
+    if (Search.ThreadCount > 1) and (depth > 2) and (k > 1) then                       // no need to do this if it is first move in list
       begin
       f := 0;
       moveHash := Moves[k] xor Board.Hash xor UInt64(depth * $4AF89F927AD5);
@@ -1562,22 +1538,38 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
       end;
 
     move := Moves[k];
-    Board.MakeMove(Move);
 
+    Board.MakeMove(Move);
+    Inc(ThreadData.NodeCount);
     RepList[ply+1] := Board.Hash;
+
+
+    // singular extension
+
+    sExtension := 0;
+    if (k = 1) and (HashMove = true) and (TTMove <> 0) and not (IsPV or InCheck or IsRoot) then
+      if (TTDepth > depth - 2) and (abs(TTScore) <= MateScoreCutoff) and (TTFlag <> ftUpperbound) then
+        begin
+        sDepth := depth div 2;
+        sBeta := TTScore - depth * 3;
+
+        sValue := -PVS_ABDADA(search, ThreadData, ply+1, sDepth, -sbeta, -sbeta+1, Cut_Node, Board, PVdummy, RepList, OmitNull, 0, Singular);
+
+        if sValue < sBeta then
+          sExtension := 1;
+        end;
+
 
     LMR_Flag := Getbit(Moves[k], 44);
 
     if LMR_Flag = true then
       begin
-      if InCheck then
+      piece := (Moves[k] shr 12) and $F;
+      if (Board.GameStage < 20) and ((piece = pawn) or (piece = king)) then     // treat king and pawn moves as interesting
         LMR_Flag := false
 
-      else if (Board.GameStage < 20) and ((Moves[k].Piece = pawn) or (Moves[k].Piece = king)) then     // treat king and pawn moves as interesting  : pawn moves has (-20%) + impact on speed of WAC_2018
-        LMR_Flag := false
-
-      else if Board.KingInCheck(Board.ToPlay) then                        // move gives check
-        LMR_Flag := false;                                                // expensive, so only call if all other conditions to do LMR are true
+      else if Board.KingInCheck(Board.ToPlay) then                              // move gives check
+        LMR_Flag := false;                                                      // expensive, so only call if all other conditions to do LMR are true
       end;
 
     if NodeType = PV_Node then
@@ -1590,38 +1582,56 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
      else
       NewNodeType := - NodeType;
 
-
     if k = 1 then
-      value := -PVS_ABDADA(search, ThreadData, ply+1, depth-1, -beta, -alpha, NewNodeType, Board, PV1, RepList, DoNull, Moves[k])
+      value := -PVS_ABDADA(search, ThreadData, ply+1, depth-1 + sExtension, -beta, -alpha, NewNodeType, Board, PV1, RepList, DoNull, Move, SingularFlag)
      else
       begin
       newDepth := depth - 1;
 
       if LMR_Flag = true then
         begin
-        LMR := max((GetHighBit_Alt(k) + GetHighBit_Alt(depth) + 1) shr 1, 2);     // k = 2..32 : highbit = 1..5,  depth = 24..1 : highbit = 4..0
-
         if NodeType = PV_Node then
-          newDepth := depth - 2       // i.e. reduce by 1 ply
+          LMR :=  2
          else
-          newDepth := depth - LMR;    // i.e. reduce by 1..5 ply depending on number of moves checked and depth
+          LMR := max((GetHighBit_Alt(k) + GetHighBit_Alt(depth) + 1) shr 1, 2);     // k = 2..32 : highbit = 1..5,  depth = 24..1 : highbit = 4..0
 
-        newdepth := max(1, newdepth);
+        newdepth := max(1, depth - LMR);
         end;
 
-      if MoveHash <> 0 then
+      if (moves[k] < $4000000000000000) and (moves[k] > $1000000000000000) and (alpha < MateScoreCutoff) and (depth < 8) then     // quiet move
+        begin
+
+        // late move pruning : prune late quiet moves with bad history (but don't prune any bad captures)
+        if (LMR_Flag = true) and (QuietsTried > (newdepth * newdepth) div 2 + 1) and not IsPV and (moves[k] < $2000000000000000) then       // prune
+          begin
+          Board.UndoMove(Move);
+          continue;
+          end;
+
+        // late move pruning : prune late quiet moves that lose too much material
+        if LMR_Flag = true then
+          begin
+          SEE_Value := Board.SEE(Move);
+          if SEE_Value > 120 then
+            begin
+            Board.UndoMove(Move);
+            continue;
+            end;
+          end;
+
+        inc(QuietsTried);
+        end;
+
+      if (Search.ThreadCount > 1) and (MoveHash <> 0) then
         Search.ABDADA_Table.MoveSearchBegin(MoveHash);
 
-      value := -PVS_ABDADA(search, ThreadData, ply+1, newDepth, -alpha-1, -alpha, NewNodeType, Board, PVdummy, RepList, DoNull, Moves[k]);
+      value := -PVS_ABDADA(search, ThreadData, ply+1, newDepth + sExtension, -alpha-1, -alpha, NewNodeType, Board, PVdummy, RepList, DoNull, Move, SingularFlag);
 
       if value <> -InvalidScore then
-        if ((value = -RepetitionFound) and (0 > alpha) and (0 < beta)) or ((value <> -RepetitionFound) and (value > alpha) and (value < beta)) then
-          value := -PVS_ABDADA(search, ThreadData, ply+1, newDepth, -beta, -alpha, NewNodeType, Board, PV1, RepList, DoNull, Moves[k]);
+        if ((value = -RepetitionFound) and (alpha < 0)  and (0 < beta)) or ((value <> -RepetitionFound) and (alpha < value) and (value < beta)) then
+          value := -PVS_ABDADA(search, ThreadData, ply+1, depth-1 + sExtension, -beta, -alpha, NewNodeType, Board, PV1, RepList, DoNull, Move, SingularFlag);
 
-      if (newdepth < depth - 1) and (value > alpha) then         // if reduced depth search returns score > alpha then research at full depth
-        value := -PVS_ABDADA(search, ThreadData, ply+1, depth-1, -beta, -alpha, PV_Node, Board, PV1, RepList, DoNull, Moves[k]);
-
-      if MoveHash <> 0 then
+      if (Search.ThreadCount > 1) and (MoveHash <> 0) then
         Search.ABDADA_Table.MoveSearchOver(MoveHash);
       end;
 
@@ -1643,14 +1653,13 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
     if value > Alpha then
       Alpha := value;
 
-    if (ply = 0) and (k = 1) and (value <> -InvalidScore) then
-      ThreadData.FirstRootMoveSearched := true;                     // flag that first move in root has been fully searched
+    if IsRoot and (k = 1) and (value <> -InvalidScore) and (SingularFlag = false) then
+      ThreadData.FirstRootMoveSearched := true;                                  // flag that first move in root has been fully searched
 
     if (value <> -InvalidScore) and (value > Best)  then
       begin
       best := value;
-      BestMove := Moves[k];
-      BestMove := UInt64(BestMove and $0000FFFFFFFFFFFF) + UInt64((value + ScoreOffset) and $FFFF) shl 48;
+      BestMove := (Moves[k] and $0000000000FFFFFF);
 
       PV[1] := BestMove;
       for i := 1 to PV1[0] do
@@ -1661,18 +1670,9 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
         begin
         if BestMove.CapturedPiece = 0 then
           begin
-          if Board.ToPlay = white then
-            begin
-            Search.WhiteHistory.Update(BestMove, depth*depth);
-            for i := 1 to k-1 do
-              Search.WhiteHistory.Update(Moves[i], -depth);
-            end
-           else
-            begin
-            Search.BlackHistory.Update(BestMove, depth * depth);
-            for i := 1 to k-1 do
-              Search.BlackHistory.Update(Moves[i], -depth);
-            end;
+          Search.QuietHistory.Update(Board.ToPlay, BestMove, depth*depth);
+          for i := 1 to k-1 do
+            Search.QuietHistory.Update(Board.ToPlay, Moves[i], -depth);
 
           if (BestMove and UInt64($FFFFFF)) <> (ThreadData.KillerMoveA[ply] and UInt64($FFFFFF)) then
             begin
@@ -1690,43 +1690,41 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
         end;
       end;
 
-    if (Search.Stop and (ply > 0)) or (Best = ScoreMinValue) or (Search.Stop and (ply = 0) and (ThreadData.FirstRootMoveSearched = false)) then
-      exit(InvalidScore);
-
-    if (Search.Stop) and (ply = 0) then
-      exit(Best);
+    if Search.Stop then
+      begin
+      if IsRoot and ThreadData.FirstRootMoveSearched then
+        exit(Best)
+       else
+        exit(InvalidScore);
+      end;
     end;
 
-  if (TT_OKtoStore = false) and (((PrevMove and UInt64($FF0000)) <> 0) or ((PrevMove and UInt64($F000)) = UInt64($1000))) then  // if prev move is capture/promotion or pawn move then irreversible position and OK to store in TT
+
+  if (TT_OKtoStore = false) and (((BestMove and UInt64($FF0000)) <> 0) or ((BestMove and UInt64($F000)) = UInt64($1000))) then  // if best move is capture/promotion or pawn move then irreversible position and OK to store in TT
     TT_OKtoStore := true;
 
-  if  TT_OKtoStore and (Search.Stop = false) then
+  if TT_OKtoStore and (Search.Stop = false) and (SingularFlag = false) then
     begin
     TempMove := BestMove;
-    if Best > MateScore - MaxSearchPly then
-      TempMove.SetScore(Best + ply)                    // saving to TT, so add ply
-     else if Best < -MateScore + MaxSearchPly then
-      TempMove.SetScore(Best - ply);                   // saving to TT, so subtract ply
 
     if Best <= alphaOrig then
       begin
-      Flag := ftUpperBound;                                    // All_Node
-      TempMove := TempMove and UInt64($FFFF000000000000);      // No idea about which move is best since all
-                                                               // failed low, so store best move of 'zero'.
+      TTFlag := ftUpperBound;         // All_Node
+      TempMove := 0;                // No idea about which move is best since all
+                                    // failed low, so store best move of 'zero'.
       end
      else if Best >= beta then
       begin
-      Flag := ftLowerBound;         // Cut_Node
+      TTFlag := ftLowerBound;         // Cut_Node
                                     // A good move to try first again since it caused
                                     // a cut-off, although it may not be the best move
                                     // as all moves were not searched.
       end
      else
-      begin
-      Flag := ftExact;              // PV_Node
-      end;
+      TTFlag := ftExact;              // PV_Node
 
-    TT_Data := search.TransTable.PackInfo(TempMove, depth, flag);     // store adjusted score in TT
+
+    TT_Data := search.TransTable.PackInfo(TempMove, Best, depth + sExtension, TTFlag, ply);     // store adjusted score in TT
     search.TransTable.StoreData(Board.Hash, TT_Data);
     end;
 
@@ -1748,6 +1746,8 @@ constructor TSearch.Create;
 
   setdefault;
   NewGame;
+
+  QueryPerformanceFrequency(TickFrequency);
 
   Searching := false;
   ShutdownUnderway := false;
@@ -1777,9 +1777,7 @@ procedure TSearch.ShutDown;
     ShutDownUnderway := true;
 
     while searching = true do   // loop while search is being halted
-      begin
       sleep(50);
-      end;
     end;
   end;
 
@@ -1790,10 +1788,40 @@ procedure TSearch.StopSearch;
   end;
 
 
+function TSearch.GetElapsedTicks : Int64;
+  var
+    NowTick : Int64;
+
+  begin
+  QueryPerformanceCounter(NowTick);
+
+  if NowTick > StartTick then
+    result := NowTick - StartTick
+   else
+    result := High(Int64) - StartTick + NowTick;
+  end;
+
+
+function TSearch.GetElapsedMilliseconds : Int64;
+  var
+    NowTick, ElapsedTick : Int64;
+
+  begin
+  QueryPerformanceCounter(NowTick);
+
+  if NowTick > StartTick then
+    ElapsedTick := NowTick - StartTick
+   else
+    ElapsedTick := High(Int64) - StartTick + NowTick;
+
+  result := ElapsedTick * 1000 div TickFrequency;
+  end;
+
+
 function TSearch.ResultToStr : string;
   var
     nps : double;
-    HashFill : integer;
+    // HashFill : integer;
 
   begin
   if Search_Result.time > 0 then
@@ -1801,24 +1829,17 @@ function TSearch.ResultToStr : string;
    else
     nps := 0.0;
 
-  if TransTable <> nil then
-    hashfill := TransTable.FillPermill;
+  if Search_Result.score >= MateScoreCutoff then
+    result := 'info depth ' + IntToStr(Search_Result.Depth) + ' seldepth ' + IntToStr(Search_Result.selDepth) + ' score mate ' + IntToStr( (ScoreMaxValue - Search_Result.score + 1) div 2)   + ' nodes ' + FormatFloat('####', Search_Result.nodes) +
+                           ' nps ' + FormatFloat('####', nps) + ' time ' + IntToStr(Search_Result.time) {+ ' hashfull ' + IntToStr(hashfill)} + ' pv ' + PVToStr(Search_Result.PV)
 
-  if Search_Result.score = -MateScore then
-    result := 'info depth 0 ' {+ ' seldepth ' + IntToStr(Search_Result.selDepth)} + 'score mate nodes ' + FormatFloat('#,###', Search_Result.nodes) {+ IntToStr(Search_Result.nodes)} +
-                            ' time ' + IntToStr(Search_Result.time)
-
-  else if Search_Result.score >= MateScore - MaxSearchPly then
-    result := 'info depth ' + IntToStr(Search_Result.Depth) {+ ' seldepth ' + IntToStr(Search_Result.selDepth)} + ' score mate ' + IntToStr( (MateScore - Search_Result.score + 1) div 2)  + ' nodes ' + FormatFloat('#,###', Search_Result.nodes) {+ IntToStr(Search_Result.nodes)} +
-                           ' nps ' + FormatFloat('#,###', nps) + ' hashfull ' + IntToStr(hashfill) + ' time ' + IntToStr(Search_Result.time) + ' pv ' + PVToStr(Search_Result.PV)
-
-  else if Search_Result.score <= -MateScore + MaxSearchPly then
-    result := 'info depth ' + IntToStr(Search_Result.Depth) {+ ' seldepth ' + IntToStr(Search_Result.selDepth)} + ' score mate -' + IntToStr( (MateScore + Search_Result.score + 1) div 2) + ' nodes ' + FormatFloat('#,###', Search_Result.nodes) {+ IntToStr(Search_Result.nodes)} +
-                           ' nps ' + FormatFloat('#,###', nps) + ' hashfull ' + IntToStr(hashfill) + ' time ' + IntToStr(Search_Result.time) + ' pv ' + PVToStr(Search_Result.PV)
+  else if Search_Result.score <= -MateScoreCutoff then
+    result := 'info depth ' + IntToStr(Search_Result.Depth) + ' seldepth ' + IntToStr(Search_Result.selDepth) + ' score mate -' + IntToStr( (ScoreMaxValue + Search_Result.score + 1) div 2)  + ' nodes ' + FormatFloat('####', Search_Result.nodes) +
+                           ' nps ' + FormatFloat('####', nps) + ' time ' + IntToStr(Search_Result.time) {+ ' hashfull ' + IntToStr(hashfill)}  + ' pv ' + PVToStr(Search_Result.PV)
 
   else
-    result := 'info depth ' + IntToStr(Search_Result.Depth) {+ ' seldepth ' + IntToStr(Search_Result.selDepth)} + ' score cp ' + IntToStr(Search_Result.score) + ' nodes ' + FormatFloat('#,###', Search_Result.nodes) {+ IntToStr(Search_Result.nodes)} +
-                           ' nps ' + FormatFloat('#,###', nps) + ' hashfull ' + IntToStr(hashfill) + ' time ' + IntToStr(Search_Result.time) + ' pv ' + PVToStr(Search_Result.PV);
+    result := 'info depth ' + IntToStr(Search_Result.Depth) + ' seldepth ' + IntToStr(Search_Result.selDepth) + ' score cp ' + IntToStr(Search_Result.score)  + ' nodes ' + FormatFloat('####', Search_Result.nodes) +
+                           ' nps ' + FormatFloat('####', nps) + ' time ' + IntToStr(Search_Result.time) {+ ' hashfull ' + IntToStr(hashfill)}  + ' pv ' + PVToStr(Search_Result.PV);
   end;
 
 
@@ -1838,9 +1859,6 @@ procedure TSearch.PrepareForNextSearch;
   ClearKillerMoves;
 
   NodeCount := 0;
-  QNodeCount := 0;
-  SearchTime := 0;
-  SelDepth := 0;
 
   Stop := false;
   ShutdownUnderway := false;
@@ -1852,24 +1870,22 @@ procedure TSearch.PrepareForNextSearch;
 procedure TSearch.SetDefault;
   begin
   DepthLimit := 128;
-  TimeLimit := UInt64(18_446_744_073_709_551_615);    // UInt64.MaxValue
-  NodeLimit := UInt64(18_446_744_073_709_551_615);    // UInt64.MaxValue
+  TimeLimit := TimeLimit_Max;
+  NodeLimit := NodeLimit_Max;
 
   DoParallelSearch := true;
-  ThreadCount := 8;
+  ThreadCount := 6;
 
   DoAspirationSearch := true;
-  DoSearchExtension := true;
 
   DoProgressUpdates := true;
-  UseOwnBook := true;
+  UseOwnBook := false;
   end;
 
 
 procedure TSearch.ClearHistoryTables;
   begin
-  WhiteHistory.ClearTable;
-  BlackHistory.ClearTable;
+  QuietHistory.ClearTable;
   end;
 
 
@@ -1882,8 +1898,7 @@ procedure TSearch.ClearCounterMoveTables;
 
 procedure TSearch.DampHistoryTables;
   begin
-  WhiteHistory.DampTable;
-  BlackHistory.DampTable;
+  QuietHistory.DampTable;
   end;
 
 
@@ -1909,6 +1924,10 @@ procedure TSearch.ClearTranspositionTable;
 procedure TSearch.SetThreadCount(Value : integer);
   begin
   ThreadCount := min(max(1, value), 32);            // 0..32
+  if ThreadCount = 1 then
+    DoParallelSearch := false
+   else
+    DoParallelSearch := true;
   end;
 
 
@@ -1929,14 +1948,14 @@ procedure TSearch.Clear_ABDADA_Table;
   ABDADA_Table.ClearTable;
   end;
 
-
+          {
 procedure TSearch.CalcTimeLimit(const Board : TBoard);
   begin
   if Board.ToPlay = white then
     TimeLimit := ((MovesToGo * TimeIncrementPerMove_White + TimeRemaining_White) * 112) div (128 * (max(MovesToGo, 1)))
    else
     TimeLimit := ((MovesToGo * TimeIncrementPerMove_Black + TimeRemaining_Black) * 112) div (128 * (max(MovesToGo, 1)));
-  end;
+  end;            }
 
 
 procedure TSearch.LoadSignatureList(const Board : TBoard; const GameMoveList : TGameMoveList);
@@ -1988,20 +2007,23 @@ procedure TSearch.StartInBackGround(const Board : TBoard; const GameMoveList : T
 
 procedure TSearch.ABDADA_Search(const Board : TBoard; const GameMoveList : TGameMoveList);
   const
-    AspirationWindow = 80;
+    AspirationMargin = 80;
 
   var
     i : integer;
     alpha, beta, MaxDepth : integer;
     ElapsedMilliseconds : Int64;
-    BestPV: TPVArray;
+    BestDepth, BestScore, SelDepth : integer;
+    BestPV: TMoveArray;
     Lock : TCriticalSection;
     workerCount, ThreadsPerDepth, index : integer;
     workers: TArray<ITask>;
     ProgressMessage : string;
     Move : TMove;
-
+    sd : array[0..MaxSearchPly] of TUpdateRec;
     DepthToken, HighestDepth : integer;
+    TimeExtension : boolean;
+    HardTickLimit, NewLimit, NewTicks, RequiredTicks : UInt64;
 
   begin
   if TransTable <> nil then
@@ -2011,25 +2033,27 @@ procedure TSearch.ABDADA_Search(const Board : TBoard; const GameMoveList : TGame
     begin
     if Book.GetMove(Board.Hash, Move, ms_BestHist) = true then
       begin
+      BestDepth := 1;
       BestPV[0] := 1;
       BestPV[1] := Move and UInt64($0000FFFFFFFFFFFF);
+      if move.score <> -32768 then
+        BestScore := Move.score
+       else
+        BestScore := 0;
 
       Search_Result.Depth := 1;
-      Search_Result.selDepth := 0;
+      Search_Result.score := BestScore;
+      Search_Result.selDepth := 1;
       Search_Result.nodes := 1;
       Search_Result.time := 0;
-      Search_Result.PV := BestPV;
-      if move.score <> -32768 then
-        Search_Result.score := Move.score
-       else
-        Search_Result.score := 0;
+      for i := 0 to BestPV[0] do
+        Search_Result.PV[i] := BestPV[i];
 
       if DoProgressUpdates = true then
         begin
         ProgressMessage := ResultToStr;
 
-        writeln(output, AnsiString(' '));
-        writeln(output, AnsiString(ProgressMessage + #13#10));
+        writeln(output, AnsiString(ProgressMessage));
 
         if Search_Result.PV[0] > 1 then
           ProgressMessage := 'bestmove ' + Search_Result.PV[1].ToStr + ' ponder ' + Search_Result.PV[2].ToStr
@@ -2038,7 +2062,8 @@ procedure TSearch.ABDADA_Search(const Board : TBoard; const GameMoveList : TGame
          else if Search_Result.PV[0] = 0 then
           ProgressMessage := 'bestmove (none)';
 
-        writeln(output, AnsiString(ProgressMessage + #13#10));
+        writeln(output, AnsiString(ProgressMessage));
+
         flush(output);
         end;
 
@@ -2052,19 +2077,36 @@ procedure TSearch.ABDADA_Search(const Board : TBoard; const GameMoveList : TGame
       end;
     end;
 
-  StartTickCount := GetTickCount64;
+  for i := low(sd) to high(sd) do
+    begin
+    sd[i].BestScore := InvalidScore;
+    sd[i].BestMove := 0;
+    sd[i].BestPV[0] := 0;
+    sd[i].SelDepth := 0;
+    sd[i].FirstRootMoveSearched := false;
+    end;
+
+  QueryPerformanceCounter(StartTick);
+  TickLimit := (TimeLimit - (ThreadCount-1) * 2) * TickFrequency div 1000;
+  HardTickLimit := (HardTimeLimit - (ThreadCount-1) * 2) * TickFrequency div 1000;
+
+  TimeExtension := false;
 
   Searching := true;
 
   if ReadyToSearch = false then
     PrepareForNextSearch;              // clears all tables except Transposition Table
 
+  {if Board.GameStage < 24 then
+    TransTable.NewSearch;      // at end of game - rely less on previous search  }
+                               // this increments age again = doubles factor for age adjust in TT
+
   LoadSignatureList(Board, GameMoveList);   // required for repetition check
 
   MaxDepth := DepthLimit;
 
-  alpha := ScoreMinValue+1;
-  beta  :=  ScoreMaxValue-1;
+  alpha := ScoreMinValue - 1;
+  beta  :=  ScoreMaxValue;
 
   if DoParallelSearch = true then
     workercount := ThreadCount
@@ -2080,6 +2122,8 @@ procedure TSearch.ABDADA_Search(const Board : TBoard; const GameMoveList : TGame
   HighestDepth := 1;
 
   BestPV[0] := 0;
+  BestDepth := 0;
+  BestScore := InvalidScore;
   ElapsedMilliseconds := 0;
   BestMove := 0;
 
@@ -2100,17 +2144,17 @@ procedure TSearch.ABDADA_Search(const Board : TBoard; const GameMoveList : TGame
           PrevMove1 : TMove;
 
           Board1 : TBoard;
-          PV1 : TPVArray;
+          PV1 : TMoveArray;
           RepList1 : TRepList;
           ThreadData1 : T_ThreadData;
           UpdateResult1 : boolean;
-          LoopCount : integer;
+          LoopCount1 : integer;
 
         begin
         k := InterLockedIncrement(Index);
 
         ply1 := 0;
-        score1 := 0;
+        score1 := InvalidScore;
         PrevMove1 := 0;      // Used for countermove hueristic, no previous move
 
         ThreadData1.Reset;
@@ -2123,112 +2167,138 @@ procedure TSearch.ABDADA_Search(const Board : TBoard; const GameMoveList : TGame
         RepList1[ply1] := Board.Hash;
 
         DepthToken := InterLockedIncrement(DepthToken);
-        SearchDepth1 := DepthToken div ThreadsPerDepth;
-        LoopCount := 0;
+        SearchDepth1 := 2;
+        LoopCount1 := 0;
 
-        while (HighestDepth < MaxDepth) and (score1 <= MateScore - SearchDepth1) and (score1 >= -MateScore + SearchDepth1) and (Stop = false) and (LoopCount < MaxDepth) do        // can stop search if mate is found
+        while (HighestDepth < MaxDepth) and (Stop = false) and (LoopCount1 < MaxDepth) do
+
           begin
-          inc(LoopCount);
+          inc(LoopCount1);
           PV1[0] := 0;
 
           if DoAspirationSearch and (SearchDepth1 > 4) then
             begin    // Do aspiration search
+
             Lock.Acquire;
 
-            if BestPV[0] > 0 then
+            if BestScore <> InvalidScore then
               begin
-              alpha1 := max(BestPV[1].score - AspirationWindow, ScoreMinValue);
-              beta1 := min(BestPV[1].score + AspirationWindow, ScoreMaxValue);
+              alpha1 := max(BestScore - AspirationMargin, ScoreMinValue - 1);
+              beta1 := min(BestScore + AspirationMargin, ScoreMaxValue);
               end
              else
               begin
-              alpha1 := ScoreMinValue+1;
-              beta1 := ScoreMaxValue-1;
+              alpha1 := ScoreMinValue - 1;
+              beta1 := ScoreMaxValue;
               end;
 
             Lock.Release;
 
-            score1 := PVS_ABDADA(@self, @ThreadData1, ply1, SearchDepth1, alpha1, beta1, PV_Node, Board1, PV1, RepList1, DoNull, PrevMove1);
+            ThreadData1.FirstRootMoveSearched := false;
 
-            if (score1 <> InvalidScore) and (score1 <> MateScore) then
-              if (score1 >= beta1) or (score1 <= alpha1) then     // had cutoff, so research full window
+            if not stop then
+              score1 := PVS_ABDADA(@self, @ThreadData1, ply1, SearchDepth1, alpha1, beta1, PV_Node, Board1, PV1, RepList1, DoNull, PrevMove1, NotSingular);
+
+            if (score1 >= beta1) or (score1 <= alpha1) then   //  if outside aspiration window then set ThreadData1.FirstRootMoveSearched = false;
+              begin
+              ThreadData1.FirstRootMoveSearched := false;
+
+              if TimeExtension = false then
                 begin
-                //   if outside aspiration window then set ThreadData1.FirstRootMoveSearched = false;
-                ThreadData1.FirstRootMoveSearched := false;
+                NewLimit := ExtendedTime(TimeLimit, HardTimeLimit);
+                TickLimit := (NewLimit - (ThreadCount-1) * 2) * TickFrequency div 1000;
+                TimeExtension := true;
+                end;
+              end;
 
-                score1 := PVS_ABDADA(@self, @ThreadData1, ply1, SearchDepth1, alpha, beta, PV_Node, Board1, PV1, RepList1, DoNull, PrevMove1);
+            if (score1 <> InvalidScore) and not stop then
+              begin
+              if score1 >= beta1 then     // had cutoff, so re-search widened window
+                begin
+                alpha1 := max(score1 - AspirationMargin div 4, alpha);
+                beta1 := beta;
+                score1 := PVS_ABDADA(@self, @ThreadData1, ply1, SearchDepth1, alpha1, beta1, PV_Node, Board1, PV1, RepList1, DoNull, PrevMove1, NotSingular);
                 end
+               else if score1 <= alpha1 then     // had cutoff, so re-search widened window
+                begin
+                alpha1 := max(score1 - AspirationMargin , alpha);
+                beta1 := min(score1 + AspirationMargin div 4, beta);
+                score1 := PVS_ABDADA(@self, @ThreadData1, ply1, SearchDepth1, alpha1, beta1, PV_Node, Board1, PV1, RepList1, DoNull, PrevMove1, NotSingular);
+                end;
+              end;
+
+            if (score1 >= beta1) or (score1 <= alpha1) then
+              begin
+              ThreadData1.FirstRootMoveSearched := false;      //   if outside aspiration window then set ThreadData1.FirstRootMoveSearched = false;
+              if (score1 <> InvalidScore) and not stop then
+                score1 := PVS_ABDADA(@self, @ThreadData1, ply1, SearchDepth1, alpha, beta, PV_Node, Board1, PV1, RepList1, DoNull, PrevMove1, NotSingular);
+              end;
+
             end
            else
-            score1 := PVS_ABDADA(@self, @ThreadData1, ply1, SearchDepth1, alpha, beta, PV_Node, Board1, PV1, RepList1, DoNull, PrevMove1);
+            begin
+            ThreadData1.FirstRootMoveSearched := false;
+            score1 := PVS_ABDADA(@self, @ThreadData1, ply1, SearchDepth1, alpha, beta, PV_Node, Board1, PV1, RepList1, DoNull, PrevMove1, NotSingular);
+            end;
+
+          Lock.Acquire;
 
           NodeCount :=  NodeCount + ThreadData1.NodeCount - ThreadData1.PrevCount;
           ThreadData1.PrevCount := ThreadData1.NodeCount;
 
-          if (score1 > ScoreMinValue) and (score1 <> InvalidScore) and (score1 <> -MateScore) and (PV1[0] > 0) then
+          UpdateResult1 := false;
+
+          sd[SearchDepth1].FirstRootMoveSearched := sd[SearchDepth1].FirstRootMoveSearched or ThreadData1.FirstRootMoveSearched;
+
+          if score1 > sd[SearchDepth1].BestScore then
             begin
-            Lock.Acquire;
-            UpdateResult1 := false;
-
-            if BestPV[0] = 0 then      // no result yet, so save something to get started
-              UpdateResult1 := true
-             else
-              begin
-
-              // 1) Found a winning mate move and new score is higher than best found so far, so it is clearly best move even if search depth is less
-
-              if (PV1[1].score >= MateScore - MaxSearchPly) and (PV1[1].score > BestPV[1].score) then
-                UpdateResult1 := true;
-
-              // 2) Searched to same depth as old best move, and score is better, so this becomes new best move
-
-              if (PV1[0] = BestPV[0]) and (PV1[1].score > BestPV[1].score) then
-                UpdateResult1 := true;
-
-              // 3) found a move searched at a greater depth
-              //    All root moves may not have been completely searched at this new depth if search truncated due to time, so this is a lower bound
-              //    Don't consider as best unless first root move at this depth has been completely searched by at least one thread as well and the previous best is not a mate score
-              //    If first root move not completely searched, then the found best move is sometimes much inferior to the first root move
-              //    which was best move at the previous lower depth
-
-              if (PV1[0] > BestPV[0]) and ThreadData1.FirstRootMoveSearched and (BestPV[1].score < MateScore - MaxSearchPly) then
-                UpdateResult1 := true;
-
-              if (PV1[1].score >= MateScore - MaxSearchPly) and (PV1[0] = MateScore - PV1[1].score) then    // lowest posible mate, so stop further search
-                Stop := true;
-
-              ElapsedMilliseconds := GetTickCount64 - StartTickCount;
-              end;
-
-            if UpdateResult1 = true then
-              begin
-              for i0 := 0 to PV1[0] do
-                BestPV[i0] := PV1[i0];
-
-              BestMove := BestPV[1];
-
-              if DoProgressUpdates = true then
-                begin
-                ElapsedMilliseconds := GetTickCount64 - StartTickCount;
-
-                if PV1[1].score >= MateScore - MaxSearchPly then
-                  ProgressMessage := 'info depth ' + IntToStr(PV1[0]) {+ ' seldepth ' + IntToStr(Search_Result.selDepth)} + ' score mate ' + IntToStr( (MateScore - PV1[1].score + 1) div 2)  + ' nodes ' + IntToStr(NodeCount) + ' time ' + IntToStr(ElapsedMilliseconds) + ' pv ' + PVToStr(PV1) + ' string : thread #' + IntToStr(k+1)
-
-                 else if PV1[1].score <= -MateScore + MaxSearchPly then
-                  ProgressMessage := 'info depth ' + IntToStr(PV1[0]) {+ ' seldepth ' + IntToStr(Search_Result.selDepth)} + ' score mate -' + IntToStr( (MateScore + PV1[1].score + 1) div 2) + ' nodes ' + IntToStr(NodeCount) + ' time ' + IntToStr(ElapsedMilliseconds) + ' pv ' + PVToStr(PV1) + ' string : thread #' + IntToStr(k+1)
-
-                 else
-                  ProgressMessage := 'info depth ' +  IntToStr(PV1[0]) + ' score cp ' + IntToStr(PV1[1].score) + ' nodes ' + IntToStr(NodeCount) + ' time ' + IntToStr(ElapsedMilliseconds) + ' pv ' + PVToStr(PV1) + ' string : thread #' + IntToStr(k+1);
-
-                writeln(output, AnsiString(ProgressMessage));
-                flush(output);
-                end;
-              end;
-
-            Lock.Release;
+            sd[SearchDepth1].BestScore := score1;
+            sd[SearchDepth1].BestMove := PV1[1];
+            sd[SearchDepth1].SelDepth := ThreadData1.SelDepth;
+            for i0 := 0 to PV1[0] do
+              sd[SearchDepth1].BestPV[i0] := PV1[i0];
             end;
 
-          Lock.Acquire;
+          if (sd[SearchDepth1].FirstRootMoveSearched = true) and
+             ((SearchDepth1 > BestDepth) or
+             ((SearchDepth1 = BestDepth) and (sd[SearchDepth1].BestScore > BestScore)) or
+             ((sd[SearchDepth1].BestScore >= MateScoreCutoff) and (score1 > BestScore)))  then
+               updateResult1 := true;
+
+          if (abs(score1) >= MateScoreCutoff) and (SearchDepth1 >= ScoreMaxValue - abs(score1)) then    // lowest posible mate, so stop further search
+            begin
+            if stop = false then
+              UpdateResult1 := true;
+            Stop := true;
+            end;
+
+          if UpdateResult1 = true then
+            begin
+            for i0 := 0 to sd[searchdepth1].BestPV[0] do
+              BestPV[i0] := sd[searchdepth1].BestPV[i0];
+
+            BestMove := sd[searchdepth1].BestMove;
+            BestScore := sd[searchdepth1].BestScore;
+            SelDepth := sd[searchdepth1].SelDepth;
+            BestDepth := SearchDepth1;
+
+            if DoProgressUpdates = true then
+              begin
+              ElapsedMilliseconds := GetElapsedMilliseconds;
+
+              if BestScore >= MateScoreCutoff then
+                ProgressMessage := 'info depth ' + IntToStr(BestDepth) + ' seldepth ' + IntToStr(SelDepth) + ' score mate ' + IntToStr( (ScoreMaxValue - BestScore + 1) div 2)  + ' nodes ' + IntToStr(NodeCount) + ' time ' + IntToStr(ElapsedMilliseconds) + ' pv ' + PVToStr(BestPV) + ' string : thread #' + IntToStr(k+1)
+
+               else if BestScore <= -MateScoreCutoff then
+                ProgressMessage := 'info depth ' + IntToStr(BestDepth) + ' seldepth ' + IntToStr(SelDepth) + ' score mate -' + IntToStr( (ScoreMaxValue + BestScore + 1) div 2) + ' nodes ' + IntToStr(NodeCount) + ' time ' + IntToStr(ElapsedMilliseconds) + ' pv ' + PVToStr(BestPV) + ' string : thread #' + IntToStr(k+1)
+
+               else
+                ProgressMessage := 'info depth ' +  IntToStr(BestDepth) + ' seldepth ' + IntToStr(SelDepth) + ' score cp ' + IntToStr(BestScore) + ' nodes ' + IntToStr(NodeCount) + ' time ' + IntToStr(ElapsedMilliseconds) + ' pv ' + PVToStr(BestPV) + ' string : thread #' + IntToStr(k+1);
+
+              writeln(output, AnsiString(ProgressMessage));
+              flush(output);
+              end;
+            end;
 
           HighestDepth := max(HighestDepth, SearchDepth1);
 
@@ -2238,10 +2308,19 @@ procedure TSearch.ABDADA_Search(const Board : TBoard; const GameMoveList : TGame
           DepthToken := InterLockedIncrement(DepthToken);
           SearchDepth1 := DepthToken div ThreadsPerDepth;
 
-          Lock.Release;
+          NewTicks := GetElapsedTicks;
 
-          if GetTickCount64 - StartTickCount >= TimeLimit - 2 then
-            Stop := true;
+          RequiredTicks := round(NewTicks * power(2, 1.25 * Log2( UInt64ToDouble(NewTicks) * 1000.0 / TickFrequency) / HighestDepth));
+
+          if TickLimit < NewTicks then
+            Stop := true
+           else if TimeLimit < HardTimeLimit then
+             begin
+             if TickLimit < RequiredTicks then
+               Stop := true;
+             end;
+
+          Lock.Release;
           end;
         end,
 
@@ -2255,37 +2334,33 @@ procedure TSearch.ABDADA_Search(const Board : TBoard; const GameMoveList : TGame
     if workercount > 1 then
       TTask.WaitForAll(workers);     //  Must wait for all remaining workers to stop
 
-    ElapsedMilliseconds := GetTickCount64 - StartTickCount;
-    SearchTime := ElapsedMilliseconds;
+    SearchTime_ms := GetElapsedMilliseconds;
 
     if BestPV[0] > 0 then
       begin
-      if (BestPV[1].score >= MateScore - MaxSearchPly) or (BestPV[1].score <= -MateScore + MaxSearchPly) then
-        Search_Result.Depth := MateScore - BestPV[1].score
-       else
-        Search_Result.Depth := BestPV[0];
-
+      Search_Result.Depth := BestDepth;
       Search_Result.selDepth := selDepth;
       Search_Result.nodes := NodeCount;
-      Search_Result.time := ElapsedMilliseconds;
-      Search_Result.PV := BestPV;
-      Search_Result.score := BestPV[1].score;
+      Search_Result.time := SearchTime_ms;
+      for i := 0 to BestPV[0] do
+        Search_Result.PV[i] := BestPV[i];
+      Search_Result.score := BestScore;
       end
      else
       begin
+      Search_Result.Depth := 0;
       Search_Result.selDepth := 0;
       Search_Result.nodes := NodeCount;
-      Search_Result.time := ElapsedMilliseconds;
-      Search_Result.PV := BestPV;
-      Search_Result.score := -MateScore;
+      Search_Result.time := SearchTime_ms;
+      Search_Result.PV[0] := 0;
+      Search_Result.score := ScoreMinValue;
       end;
 
     if DoProgressUpdates = true then
       begin
       ProgressMessage := ResultToStr;
 
-      writeln(output, AnsiString(' '));
-      writeln(output, AnsiString(ProgressMessage + #13#10));
+      writeln(output, AnsiString(ProgressMessage));
 
       if Search_Result.PV[0] > 1 then
         ProgressMessage := 'bestmove ' + Search_Result.PV[1].ToStr + ' ponder ' + Search_Result.PV[2].ToStr
@@ -2294,7 +2369,7 @@ procedure TSearch.ABDADA_Search(const Board : TBoard; const GameMoveList : TGame
        else if Search_Result.PV[0] = 0 then
         ProgressMessage := 'bestmove (none)';
 
-      writeln(output, AnsiString(ProgressMessage + #13#10));
+      writeln(output, AnsiString(ProgressMessage));
       flush(output);
       end;
 
@@ -2312,6 +2387,51 @@ procedure TSearch.ABDADA_Search(const Board : TBoard; const GameMoveList : TGame
   end;
 
 
+function UInt64ToDouble(value : UInt64) : double;
+  begin
+  result := value;
+  end;
+
+
+function ExtendedTime(TimeLimit, HardLimit : UInt64) : UInt64;
+  const
+    factor = 1.33;    // if outside aspiration window then allow additional search time for move
+
+  begin
+  result := min(HardLimit, UInt64(round(UInt64ToDouble(TimeLimit) * factor)));
+  end;
+
+
+// time strategy #1 : Polynomial model of remaining moves
+
+function AllocateTimeForSearch_Alt(MovesToGo, TimeRemaining, Increment, MoveNumber : UInt64) : UInt64;
+
+  // time reserve = increment x factor
+
+  const
+    ReserveFactor = 2;      // Time safety factor
+    AdditionFactor = 1.66;  // Factor to increase target time because actual time used is typically less due to insufficent time to complete another full iteration
+
+    BackLoadStart = 0.56;       // Backload reduces target time for early moves and increases time for mid game moves
+    BackLoadIncrement = 0.02;
+    BackLoadLimit = 1.72;
+
+  var
+    RemainingMoves, BackLoading : double;
+
+  begin
+  if MovesToGo > 0 then
+    result := ((MovesToGo * Increment + TimeRemaining) * 112) div (128 * (max(MovesToGo, 1)))
+   else
+    begin
+    RemainingMoves := MAX((((((((6.3830E-12 * MoveNumber) -5.971148E-09) * MoveNumber + 2.167290653E-06) * MoveNumber) -3.866640315E-04) * MoveNumber + 3.456441656E-02) * MoveNUmber -1.44359537) * MoveNumber + 51.856, 4);
+    BackLoading := min(BackLoadIncrement * MoveNumber + BackLoadStart, BackLoadLimit);
+
+    result := round( min(AdditionFactor * BackLoading * UInt64ToDouble( max(TimeRemaining - Increment * ReserveFactor, 0) ) / RemainingMoves + Increment, TimeRemaining / ReserveFactor));
+    end;
+  end;
+
+
 initialization
 
   if Pool = nil then
@@ -2319,8 +2439,10 @@ initialization
     Pool := TThreadPool.Create;
     Pool.SetMaxWorkerThreads(16);
     Pool.SetMinWorkerThreads(16);
+    Pool.UnlimitedWorkerThreadsWhenBlocked := False;
     end;
 
+  //Book.LoadFromFile(ExtractFileDir(ParamStr(0)) + '\..\..\' + 'Resources\Opening_Books\Opening Book 00.txt');
   Book.LoadFromResource('Open_Book');
 
 finalization

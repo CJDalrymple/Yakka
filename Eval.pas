@@ -28,6 +28,7 @@ interface
 
 Uses
   Winapi.Windows, System.Classes, System.Math, System.SysUtils, Common,
+
   GameDef, EndGame;
 
 
@@ -54,16 +55,22 @@ type
 
 
 type
+  TPawnRec = record
+    UID : UInt64;
+    Data : UInt64;
+    end;
+
+type
   T_PawnHash_Table = record
     const
       TableSize = $8000;             // 2^15       = 32,768 slots
       TableMask = TableSize - 1 ;    // 2^15 - 1
 
     var
-    Table : Array[0..TableSize-1] of UInt64;
+    Table : Array[0..TableSize-1] of TPawnRec;
 
-    function RetrieveScore(HashCode : UInt64; var score : Int64) : boolean;
-    procedure StoreScore(HashCode : UInt64; score : Int64);
+    function RetrieveData(HashCode : UInt64; var score : integer; var Passers : UInt64) : boolean;
+    procedure StoreData(HashCode : UInt64; score : integer; Passers : UInt64);
     procedure ClearTable;
     end;
 
@@ -86,10 +93,10 @@ const
 
     Board_Centre_Ext    = UInt64($00183C7E7E3C1800);
 
-    Board_Top    = UInt64($00000000FFFFFFFF);   //   5..8
-    Board_Bottom = UInt64($FFFFFFFF00000000);   //   1..4
-    Board_Left   = UInt64($0F0F0F0F0F0F0F0F);   //   a..d
-    Board_Right  = UInt64($F0F0F0F0F0F0F0F0);   //   e..h
+    Board_Top_Half    = UInt64($00000000FFFFFFFF);   //   5..8
+    Board_Bottom_Half = UInt64($FFFFFFFF00000000);   //   1..4
+    Board_Left_Half   = UInt64($0F0F0F0F0F0F0F0F);   //   a..d
+    Board_Right_Half  = UInt64($F0F0F0F0F0F0F0F0);   //   e..h
 
     Board_White =  UInt64($AA55AA55AA55AA55);
     Board_Black =  UInt64($55AA55AA55AA55AA);
@@ -98,15 +105,26 @@ const
     Board_RightEdge  = UInt64($8080808080808080);
 
 
-    FileMask : array[0..7] of UInt64 =
-       ($0101010101010101,
-        $0202020202020202,
-        $0404040404040404,
-        $0808080808080808,
-        $1010101010101010,
-        $2020202020202020,
-        $4040404040404040,
-        $8080808080808080);
+    AdjacentFiles : array[0..7] of UInt64 =
+     ($0202020202020202,
+      $0505050505050505,
+      $0A0A0A0A0A0A0A0A,
+      $1414141414141414,
+      $2828282828282828,
+      $5050505050505050,
+      $A0A0A0A0A0A0A0A0,
+      $4040404040404040);
+
+
+   KingAttackMask : array[0..63] of UInt64 =
+     	($0000000000000302, $0000000000000705, $0000000000000E0A, $0000000000001C14, $0000000000003828, $0000000000007050, $000000000000E0A0, $000000000000C040,
+	     $0000000000030203, $0000000000070507, $00000000000E0A0E, $00000000001C141C, $0000000000382838, $0000000000705070, $0000000000E0A0E0, $0000000000C040C0,
+	     $0000000003020300, $0000000007050700, $000000000E0A0E00, $000000001C141C00, $0000000038283800, $0000000070507000, $00000000E0A0E000, $00000000C040C000,
+	     $0000000302030000, $0000000705070000, $0000000E0A0E0000, $0000001C141C0000, $0000003828380000, $0000007050700000, $000000E0A0E00000, $000000C040C00000,
+	     $0000030203000000, $0000070507000000, $00000E0A0E000000, $00001C141C000000, $0000382838000000, $0000705070000000, $0000E0A0E0000000, $0000C040C0000000,
+	     $0003020300000000, $0007050700000000, $000E0A0E00000000, $001C141C00000000, $0038283800000000, $0070507000000000, $00E0A0E000000000, $00C040C000000000,
+	     $0302030000000000, $7050700000000000, $E0A0E00000000000, $1C141C0000000000, $3828380000000000, $7050700000000000, $E0A0E00000000000, $C040C00000000000,
+	     $0203000000000000, $0507000000000000, $0A0E000000000000, $141C000000000000, $2838000000000000, $5070000000000000, $A0E0000000000000, $40C0000000000000);
 
 
     BlackPassMask : array[0..63] of UInt64 =
@@ -242,6 +260,7 @@ const
       $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000);
 
 
+
     KingPrecinctIndex : array[0..63] of integer =
 
         ( 0,  1,  1,  1,  1,  1,  1,  0,
@@ -252,6 +271,7 @@ const
           1,  2,  2,  2,  2,  2,  2,  1,
           1,  2,  2,  2,  2,  2,  2,  1,
           0,  1,  1,  1,  1,  1,  1,  0);
+
 
     KingRegionIndex : array[0..63] of integer =
 
@@ -264,65 +284,67 @@ const
           1,  1,  2,  2,  2,  2,  0,  0,
           1,  1,  1,  1,  0,  0,  0,  0);
 
+
 // =============================================================================
 
 
    Material_Table : array[0..53, 0..8] of integer =
 
-((     0,      70,     148,     218,     278,     344,     411,     477,     444),  //  [Q=0, R=0, B=0, N=0]
-(    384,     432,     503,     579,     660,     755,     867,     990,    1125),  //  [Q=0, R=0, B=0, N=1]
-(    373,     701,     845,     957,    1075,    1195,    1363,    1554,    1779),  //  [Q=0, R=0, B=0, N=2]
-(    440,     454,     507,     571,     638,     721,     819,     935,    1067),  //  [Q=0, R=0, B=1, N=0]
-(    506,     757,     860,     963,    1070,    1194,    1345,    1518,    1706),  //  [Q=0, R=0, B=1, N=1]
-(    795,    1051,    1192,    1332,    1484,    1624,    1817,    2078,    2214),  //  [Q=0, R=0, B=1, N=2]
-(    539,     795,     928,    1044,    1163,    1290,    1427,    1571,    1741),  //  [Q=0, R=0, B=2, N=0]
-(    873,    1079,    1245,    1395,    1554,    1702,    1885,    2122,    2345),  //  [Q=0, R=0, B=2, N=1]
-(   1430,    1435,    1535,    1743,    1920,    2120,    2319,    2583,    2503),  //  [Q=0, R=0, B=2, N=2]
-(    634,     711,     771,     855,     940,    1037,    1144,    1259,    1334),  //  [Q=0, R=1, B=0, N=0]
-(    716,     968,    1101,    1217,    1337,    1472,    1631,    1798,    1952),  //  [Q=0, R=1, B=0, N=1]
-(   1051,    1291,    1427,    1574,    1733,    1894,    2094,    2287,    2500),  //  [Q=0, R=1, B=0, N=2]
-(    714,     967,    1092,    1213,    1336,    1465,    1610,    1764,    1916),  //  [Q=0, R=1, B=1, N=0]
-(   1019,    1256,    1422,    1570,    1720,    1887,    2079,    2289,    2515),  //  [Q=0, R=1, B=1, N=1]
-(   1380,    1574,    1719,    1892,    2076,    2283,    2514,    2764,    3053),  //  [Q=0, R=1, B=1, N=2]
-(   1051,    1304,    1479,    1640,    1800,    1965,    2155,    2370,    2592),  //  [Q=0, R=1, B=2, N=0]
-(   1385,    1581,    1788,    1955,    2152,    2360,    2594,    2853,    3122),  //  [Q=0, R=1, B=2, N=1]
-(   2261,    1833,    2034,    2219,    2460,    2711,    2993,    3294,    3686),  //  [Q=0, R=1, B=2, N=2]
-(   1061,    1214,    1345,    1474,    1601,    1735,    1881,    2033,    2205),  //  [Q=0, R=2, B=0, N=0]
-(   1299,    1509,    1666,    1821,    1983,    2164,    2361,    2570,    2772),  //  [Q=0, R=2, B=0, N=1]
-(   1652,    1759,    1952,    2133,    2329,    2543,    2788,    3038,    3291),  //  [Q=0, R=2, B=0, N=2]
-(   1266,    1491,    1649,    1811,    1974,    2149,    2337,    2536,    2728),  //  [Q=0, R=2, B=1, N=0]
-(   1515,    1741,    1940,    2122,    2320,    2536,    2776,    3030,    3282),  //  [Q=0, R=2, B=1, N=1]
-(   2091,    2023,    2189,    2401,    2633,    2891,    3181,    3481,    3806),  //  [Q=0, R=2, B=1, N=2]
-(   1688,    1818,    1997,    2205,    2395,    2611,    2843,    3096,    3340),  //  [Q=0, R=2, B=2, N=0]
-(   2075,    1945,    2249,    2470,    2702,    2962,    3249,    3555,    3863),  //  [Q=0, R=2, B=2, N=1]
-(   2591,    2436,    2430,    2731,    2992,    3299,    3642,    3983,    4329),  //  [Q=0, R=2, B=2, N=2]
-(    940,    1074,    1215,    1346,    1488,    1636,    1794,    1945,    2143),  //  [Q=1, R=0, B=0, N=0]
-(   1144,    1451,    1614,    1766,    1935,    2103,    2294,    2494,    2752),  //  [Q=1, R=0, B=0, N=1]
-(   1572,    1756,    1930,    2119,    2321,    2512,    2721,    2960,    3145),  //  [Q=1, R=0, B=0, N=2]
-(   1203,    1453,    1624,    1789,    1954,    2120,    2297,    2483,    2630),  //  [Q=1, R=0, B=1, N=0]
-(   1512,    1766,    1950,    2140,    2323,    2523,    2740,    2984,    3210),  //  [Q=1, R=0, B=1, N=1]
-(   1961,    1944,    2182,    2404,    2651,    2860,    3137,    3415,    3592),  //  [Q=1, R=0, B=1, N=2]
-(   1605,    1868,    2035,    2221,    2405,    2608,    2815,    3058,    3248),  //  [Q=1, R=0, B=2, N=0]
-(   2171,    2141,    2293,    2488,    2708,    2947,    3219,    3517,    3669),  //  [Q=1, R=0, B=2, N=1]
-(   2725,    2577,    2541,    2749,    2980,    3267,    3560,    3899,    3849),  //  [Q=1, R=0, B=2, N=2]
-(   1534,    1682,    1852,    2009,    2175,    2344,    2528,    2718,    2929),  //  [Q=1, R=1, B=0, N=0]
-(   1763,    1927,    2126,    2314,    2513,    2719,    2951,    3196,    3431),  //  [Q=1, R=1, B=0, N=1]
-(   2186,    2128,    2340,    2579,    2814,    3066,    3346,    3634,    3909),  //  [Q=1, R=1, B=0, N=2]
-(   1756,    1941,    2140,    2331,    2534,    2740,    2961,    3202,    3431),  //  [Q=1, R=1, B=1, N=0]
-(   1928,    2143,    2378,    2592,    2832,    3085,    3358,    3643,    3957),  //  [Q=1, R=1, B=1, N=1]
-(   2436,    2313,    2552,    2833,    3108,    3407,    3720,    4048,    4348),  //  [Q=1, R=1, B=1, N=2]
-(   2089,    2241,    2436,    2678,    2916,    3174,    3445,    3730,    4002),  //  [Q=1, R=1, B=2, N=0]
-(   2365,    2413,    2626,    2896,    3191,    3485,    3798,    4132,    4461),  //  [Q=1, R=1, B=2, N=1]
-(   3091,    2766,    2772,    3120,    3432,    3782,    4142,    4519,    4925),  //  [Q=1, R=1, B=2, N=2]
-(   1904,    2120,    2323,    2544,    2757,    2976,    3202,    3428,    3655),  //  [Q=1, R=2, B=0, N=0]
-(   2091,    2324,    2538,    2805,    3060,    3327,    3601,    3889,    4174),  //  [Q=1, R=2, B=0, N=1]
-(   2694,    2609,    2769,    3037,    3328,    3637,    3954,    4282,    4607),  //  [Q=1, R=2, B=0, N=2]
-(   2077,    2356,    2582,    2825,    3076,    3338,    3609,    3889,    4170),  //  [Q=1, R=2, B=1, N=0]
-(   2374,    2480,    2786,    3055,    3343,    3648,    3969,    4299,    4629),  //  [Q=1, R=2, B=1, N=1]
-(   2919,    2586,    2924,    3252,    3601,    3942,    4311,    4693,    5082),  //  [Q=1, R=2, B=1, N=2]
-(   2764,    2577,    2840,    3132,    3431,    3739,    4051,    4377,    4704),  //  [Q=1, R=2, B=2, N=0]
-(   3095,    2796,    2989,    3319,    3670,    4021,    4387,    4767,    5158),  //  [Q=1, R=2, B=2, N=1]
-(   3294,    2799,    3086,    3527,    3892,    4311,    4735,    5176,    5602));  //  [Q=1, R=2, B=2, N=2]
+  ((     0,      70,     148,     218,     278,     344,     411,     477,     444),  //  [Q=0, R=0, B=0, N=0]
+  (    384,     432,     503,     579,     660,     755,     867,     990,    1125),  //  [Q=0, R=0, B=0, N=1]
+  (    373,     701,     845,     957,    1075,    1195,    1363,    1554,    1779),  //  [Q=0, R=0, B=0, N=2]
+  (    440,     454,     507,     571,     638,     721,     819,     935,    1067),  //  [Q=0, R=0, B=1, N=0]
+  (    506,     757,     860,     963,    1070,    1194,    1345,    1518,    1706),  //  [Q=0, R=0, B=1, N=1]
+  (    795,    1051,    1192,    1332,    1484,    1624,    1817,    2078,    2214),  //  [Q=0, R=0, B=1, N=2]
+  (    539,     795,     928,    1044,    1163,    1290,    1427,    1571,    1741),  //  [Q=0, R=0, B=2, N=0]
+  (    873,    1079,    1245,    1395,    1554,    1702,    1885,    2122,    2345),  //  [Q=0, R=0, B=2, N=1]
+  (   1430,    1435,    1535,    1743,    1920,    2120,    2319,    2583,    2503),  //  [Q=0, R=0, B=2, N=2]
+  (    634,     711,     771,     855,     940,    1037,    1144,    1259,    1334),  //  [Q=0, R=1, B=0, N=0]
+  (    716,     968,    1101,    1217,    1337,    1472,    1631,    1798,    1952),  //  [Q=0, R=1, B=0, N=1]
+  (   1051,    1291,    1427,    1574,    1733,    1894,    2094,    2287,    2500),  //  [Q=0, R=1, B=0, N=2]
+  (    714,     967,    1092,    1213,    1336,    1465,    1610,    1764,    1916),  //  [Q=0, R=1, B=1, N=0]
+  (   1019,    1256,    1422,    1570,    1720,    1887,    2079,    2289,    2515),  //  [Q=0, R=1, B=1, N=1]
+  (   1380,    1574,    1719,    1892,    2076,    2283,    2514,    2764,    3053),  //  [Q=0, R=1, B=1, N=2]
+  (   1051,    1304,    1479,    1640,    1800,    1965,    2155,    2370,    2592),  //  [Q=0, R=1, B=2, N=0]
+  (   1385,    1581,    1788,    1955,    2152,    2360,    2594,    2853,    3122),  //  [Q=0, R=1, B=2, N=1]
+  (   2261,    1833,    2034,    2219,    2460,    2711,    2993,    3294,    3686),  //  [Q=0, R=1, B=2, N=2]
+  (   1061,    1214,    1345,    1474,    1601,    1735,    1881,    2033,    2205),  //  [Q=0, R=2, B=0, N=0]
+  (   1299,    1509,    1666,    1821,    1983,    2164,    2361,    2570,    2772),  //  [Q=0, R=2, B=0, N=1]
+  (   1652,    1759,    1952,    2133,    2329,    2543,    2788,    3038,    3291),  //  [Q=0, R=2, B=0, N=2]
+  (   1266,    1491,    1649,    1811,    1974,    2149,    2337,    2536,    2728),  //  [Q=0, R=2, B=1, N=0]
+  (   1515,    1741,    1940,    2122,    2320,    2536,    2776,    3030,    3282),  //  [Q=0, R=2, B=1, N=1]
+  (   2091,    2023,    2189,    2401,    2633,    2891,    3181,    3481,    3806),  //  [Q=0, R=2, B=1, N=2]
+  (   1688,    1818,    1997,    2205,    2395,    2611,    2843,    3096,    3340),  //  [Q=0, R=2, B=2, N=0]
+  (   2075,    1945,    2249,    2470,    2702,    2962,    3249,    3555,    3863),  //  [Q=0, R=2, B=2, N=1]
+  (   2591,    2436,    2430,    2731,    2992,    3299,    3642,    3983,    4329),  //  [Q=0, R=2, B=2, N=2]
+  (    940,    1074,    1215,    1346,    1488,    1636,    1794,    1945,    2143),  //  [Q=1, R=0, B=0, N=0]
+  (   1144,    1451,    1614,    1766,    1935,    2103,    2294,    2494,    2752),  //  [Q=1, R=0, B=0, N=1]
+  (   1572,    1756,    1930,    2119,    2321,    2512,    2721,    2960,    3145),  //  [Q=1, R=0, B=0, N=2]
+  (   1203,    1453,    1624,    1789,    1954,    2120,    2297,    2483,    2630),  //  [Q=1, R=0, B=1, N=0]
+  (   1512,    1766,    1950,    2140,    2323,    2523,    2740,    2984,    3210),  //  [Q=1, R=0, B=1, N=1]
+  (   1961,    1944,    2182,    2404,    2651,    2860,    3137,    3415,    3592),  //  [Q=1, R=0, B=1, N=2]
+  (   1605,    1868,    2035,    2221,    2405,    2608,    2815,    3058,    3248),  //  [Q=1, R=0, B=2, N=0]
+  (   2171,    2141,    2293,    2488,    2708,    2947,    3219,    3517,    3669),  //  [Q=1, R=0, B=2, N=1]
+  (   2725,    2577,    2541,    2749,    2980,    3267,    3560,    3899,    3849),  //  [Q=1, R=0, B=2, N=2]
+  (   1534,    1682,    1852,    2009,    2175,    2344,    2528,    2718,    2929),  //  [Q=1, R=1, B=0, N=0]
+  (   1763,    1927,    2126,    2314,    2513,    2719,    2951,    3196,    3431),  //  [Q=1, R=1, B=0, N=1]
+  (   2186,    2128,    2340,    2579,    2814,    3066,    3346,    3634,    3909),  //  [Q=1, R=1, B=0, N=2]
+  (   1756,    1941,    2140,    2331,    2534,    2740,    2961,    3202,    3431),  //  [Q=1, R=1, B=1, N=0]
+  (   1928,    2143,    2378,    2592,    2832,    3085,    3358,    3643,    3957),  //  [Q=1, R=1, B=1, N=1]
+  (   2436,    2313,    2552,    2833,    3108,    3407,    3720,    4048,    4348),  //  [Q=1, R=1, B=1, N=2]
+  (   2089,    2241,    2436,    2678,    2916,    3174,    3445,    3730,    4002),  //  [Q=1, R=1, B=2, N=0]
+  (   2365,    2413,    2626,    2896,    3191,    3485,    3798,    4132,    4461),  //  [Q=1, R=1, B=2, N=1]
+  (   3091,    2766,    2772,    3120,    3432,    3782,    4142,    4519,    4925),  //  [Q=1, R=1, B=2, N=2]
+  (   1904,    2120,    2323,    2544,    2757,    2976,    3202,    3428,    3655),  //  [Q=1, R=2, B=0, N=0]
+  (   2091,    2324,    2538,    2805,    3060,    3327,    3601,    3889,    4174),  //  [Q=1, R=2, B=0, N=1]
+  (   2694,    2609,    2769,    3037,    3328,    3637,    3954,    4282,    4607),  //  [Q=1, R=2, B=0, N=2]
+  (   2077,    2356,    2582,    2825,    3076,    3338,    3609,    3889,    4170),  //  [Q=1, R=2, B=1, N=0]
+  (   2374,    2480,    2786,    3055,    3343,    3648,    3969,    4299,    4629),  //  [Q=1, R=2, B=1, N=1]
+  (   2919,    2586,    2924,    3252,    3601,    3942,    4311,    4693,    5082),  //  [Q=1, R=2, B=1, N=2]
+  (   2764,    2577,    2840,    3132,    3431,    3739,    4051,    4377,    4704),  //  [Q=1, R=2, B=2, N=0]
+  (   3095,    2796,    2989,    3319,    3670,    4021,    4387,    4767,    5158),  //  [Q=1, R=2, B=2, N=1]
+  (   3294,    2799,    3086,    3527,    3892,    4311,    4735,    5176,    5602));  //  [Q=1, R=2, B=2, N=2]
+
 
   ThirdKnightValue = 413;
   ThirdBishopValue = 316;
@@ -485,16 +507,16 @@ const
          28,    -34,    -15,     10,    -12,     15,    -31,    -12));
 
 
-  Knight_Mobility_Eval : array[0..8] of integer =
+  Knight_Mobility : array[0..8] of integer =
     (    -52,      0,     28,     45,     59,     74,     85,     93,     88);
 
-  Bishop_Mobility_Eval : array[0..13] of integer =
+  Bishop_Mobility : array[0..13] of integer =
     (     -6,     31,     52,     64,     78,     90,     99,    106,    110,    113,    114,    107,    116,     85);
 
-  Rook_Mobility_Eval : array[0..14] of integer =
+  Rook_Mobility : array[0..14] of integer =
     (    -51,     63,     88,     95,    104,    108,    116,    123,    129,    135,    140,    145,    149,    145,    135);
 
-  Queen_Mobility_Eval : array[0..27] of integer =
+  Queen_Mobility : array[0..27] of integer =
     (    -46,    138,    143,    148,    159,    161,    165,    170,    176,    181,    186,    191,    197,    201,    206,    208,    210,    213,    215,    213,    207,    206,    194,    176,    163,    146,    139,    126);
 
   AttackBonus_STM : array[pawn..queen, pawn..queen] of integer =
@@ -512,6 +534,23 @@ const
    (   0,  39,   0,  59, 113),
    (   0,  23,  30,   0, 110),
    (   0,   4,  10,   5,   0));
+
+
+  MultiAttackBonus_STM : array[knight..queen, 0..8] of integer =
+
+  ((   1,   1,  -9, -30,   0,   0,   0,   0,   0),
+   (   0,   1, -26,  -6,   0,   0,   0,   0,   0),
+   (   0,   1, -16, -38,   0,   0,   0,   0,   0),
+   (   0,   3,  -4, -24, -13,   0,   0,   0,   0));
+
+  MultiAttackBonus_OTM : array[knight..queen, 0..8] of integer =
+
+  ((   0,  -1,  17, -22,   0,   0,   0,   0,   0),
+   (   0,   0,  -4,  -6,   0,   0,   0,   0,   0),
+   (   0,   1,  -6, -29,   0,   0,   0,   0,   0),
+   (   0,   1,   1, -11, -15,   0,   0,   0,   0));
+
+
 
   DefendedByBonus : array[pawn..queen] of integer =
     (   4,  3,  6,  7,  6);                                 // rook & queen values are used in mg, eg values = 0
@@ -538,6 +577,7 @@ const
   RookOnSemiOpenFile_Bonus_mg = 12;
   RookOnSemiOpenFile_Bonus_eg = 33;
   BishopPawn_Penalty = -8;
+  BishopCentreControl_Bonus = 7;
   KingKnightDist_Penalty = -7;
   KingBishopDist_Penalty = -4;
 
@@ -625,57 +665,72 @@ const
     (   -36,   -80,   -82,   -65,  -109,   -60,  -155,     0,     0,     0,     0,     0,     0)));
 
 
-  PassedPawn_Table : array[0..63] of integer =
+    PassedPawn_Table : array[0..63] of integer =
 
   (      0,      0,      0,      0,      0,      0,      0,      0,
-       187,    193,    172,    186,    193,    178,    153,    173,
-        72,     76,     55,     30,     36,     27,     17,     21,
-        36,     44,     32,     36,     33,     45,     51,     42,
-        16,     34,     23,     18,     19,     30,     48,     40,
-         1,     15,     10,      4,     12,     11,     22,     24,
-        -3,     15,      6,      3,     15,     -2,     14,     22,
+       232,    243,    226,    240,    241,    219,    195,    212,
+       104,    106,     85,     53,     50,     44,     33,     36,
+        61,     67,     44,     36,     33,     49,     56,     44,
+        37,     37,     13,      6,      6,     15,     37,     31,
+         6,      3,     -9,    -17,    -12,    -12,     -2,      2,
+        -2,     -2,    -19,    -22,    -12,    -32,    -12,     -3,
          0,      0,      0,      0,      0,      0,      0,      0);
 
 
   ConnectedPawn_Table : array[0..63] of integer =
 
   (      0,      0,      0,      0,      0,      0,      0,      0,
-        88,    110,    114,    158,    129,     70,     88,     21,
-        56,     60,     70,     94,     89,     76,     45,     33,
-        13,     20,     35,     28,     38,     40,     26,     15,
-         3,     17,     19,     22,     22,     23,     20,     14,
-        10,     19,     26,     30,     35,     20,     18,     15,
-         5,      8,     -2,     13,     24,    -11,      5,     -6,
+       102,    122,    125,    169,    135,     83,     91,     36,
+        55,     62,     71,     92,     87,     71,     41,     32,
+        13,     16,     32,     24,     33,     37,     24,     14,
+         3,     14,     16,     19,     19,     20,     17,     14,
+         8,     16,     26,     25,     30,     17,     17,     14,
+         6,      9,      1,      4,     19,    -10,      8,     -5,
          0,      0,      0,      0,      0,      0,      0,      0);
 
 
-  IsolatedPawnPenalty_mg = -14;
+  IsolatedPawnPenalty_mg = -11;
   IsolatedPawnPenalty_eg = -7;
-  DoubledPawnPenalty_mg = -7;
-  DoubledPawnPenalty_eg = -19;
-  BackwardPawnPenalty_mg = -9;
+  DoubledPawnPenalty_mg = -8;
+  DoubledPawnPenalty_eg = -18;
+  BackwardPawnPenalty_mg = -11;
   BackwardPawnPenalty_eg = -6;
-  PawnWidthBonus_mg = -11;
-  PawnWidthBonus_eg = 13;
-  RookBehindPassedPawn_Bonus_mg = 0;
-  RookBehindPassedPawn_Bonus_eg = 20;
-  BlockedOnRank6Penalty_mg = -24;
+  PawnWidthBonus_mg = -6;
+  PawnWidthBonus_eg = 10;
+  BlockedOnRank6Penalty_mg = -25;
   BlockedOnRank6Penalty_eg = -35;
-  BlockedOnRank7Penalty_mg = -2;
+  BlockedOnRank7Penalty_mg = -6;
   BlockedOnRank7Penalty_eg = -108;
-  UnstoppableBonus = 53;
-  KingEscortBonus = 89;
+
+  PasserCanAdvanceBonusA_eg = 23;
+  PasserBlockedPenaltyA_eg = -27;
+  PasserCanAdvanceBonusB_eg = -1;
+  PasserBlockedPenaltyB_eg = -19;
+
+  UnstoppableBonus_eg : array[0..6] of integer =
+    (   0, 899, 705, 415, 204,  20,  78);
+
+  KingProximityBonusA_eg : array[-7..7] of integer =
+    (  40, 156, 159, 117, 116, 134, 124, 126, 107,  69,  24, -31, -66,-109,-131);
+
+  KingProximityBonusB_eg : array[-6..6] of integer =
+    (  82,  60,  56,  44,  39,  18,  10,  -6, -20, -33, -50, -88, -56);
+
+  KingEscortBonus_eg = 921;
 
 
 // ============================================================================
 
 
 function Distance(Cell1, Cell2 : integer) : integer;
+function FileMask(Cell : integer) : UInt64;
+function RankMask(Cell : integer) : UInt64;
+function RanksBelowMask(rank : integer) : UInt64;
+function RanksAboveMask(rank : integer) : UInt64;
 
 function ScoreFromBoard(const Board : TBoard) : integer;
-function EvalCalc(const Board : TBoard) : integer;
-function PawnBonus(const Board : TBoard) : integer;
-
+function EvalCalc(const Board : TBoard; Passers : UInt64) : integer;
+function PawnBonus(const Board : TBoard; var Passers : UInt64) : integer;
 
 function IsPassedPawn(const Board : TBoard; Player, Cell : integer) : boolean;
 function IsIsolatedPawn(const Board : TBoard; Player, Cell : integer) : boolean;
@@ -693,19 +748,14 @@ function KingOnKeySquare(const Board : TBoard; Player, Cell : integer) : boolean
 function IsOpenFile(const Board : TBoard; Cell : integer) : boolean;
 function IsSemiOpenFile(const Board : TBoard; Player, Cell : integer) : boolean;
 
-function RemainingMoveCountEstimate(var Board : TBoard) : integer;
-function RemainingMoveCountEstimate_Alt(var Board : TBoard; MoveNumber : UInt64) : integer;
+function RemainingMoveCountEstimate(const Board : TBoard) : integer;
+function RemainingMoveCountEstimate_Alt(const Board : TBoard; MoveNumber : UInt64) : integer;
 
 function Q_Eval(alpha, beta: Integer; var Board : TBoard; PrevMove : TMove): integer;
-
-function AllocateTimeForMove(TimeRemaining, MoveNumber : UInt64) : UInt64;
-function AllocateTimeForMove_2(TimeRemaining, MoveNumber : UInt64) : UInt64;
-function AllocateTimeForMove_2A(TimeRemaining, Increment, MoveNumber : UInt64; Board : TBoard) : UInt64;
 
 var
   PawnHashTable : T_PawnHash_Table;
   EvalHashTable : T_EvalHash_Table;
-
 
 implementation
 
@@ -713,7 +763,8 @@ implementation
     Search;
 
 
-// ================= PawnHash ==================================================
+// ================= Eval Hash ==================================================
+
 
 // score [-32767..32767]
 
@@ -765,36 +816,39 @@ procedure T_EvalHash_Table.ClearTable;
 
 // ================= PawnHash ==================================================
 
+// score [-32768..32767]
 
-// score [-2047..2047]
-
-procedure T_PawnHash_Table.StoreScore(HashCode : UInt64; Score : Int64);
+procedure T_PawnHash_Table.StoreData(HashCode : UInt64; score : integer; Passers : UInt64);
   var
     index, Data : UInt64;
 
   begin
   index := UInt64(HashCode and TableMask);
-  Data := (HashCode and UInt64($000FFFFFFFFFFFFF)) or (UInt64(Score + 2048) shl 52);
 
-  Table[index] := Data;
+  Data := (Passers shl 8) or UInt64((score + 32768) and $FFFF);
+
+  Table[index].UID := HashCode xor Data;
+  Table[index].Data := Data;
   end;
 
 
-function T_PawnHash_Table.RetrieveScore(HashCode : UInt64; var score : Int64) : boolean;
+function T_PawnHash_Table.RetrieveData(HashCode : UInt64; var score : integer; var Passers : UInt64) : boolean;
   var
-    index, Data : UInt64;
+    index, UID, Data : UInt64;
 
   begin
-  index := UInt64(HashCode and TableMask);
-  Data := Table[index];
+  result := false;
+  index := (HashCode and TableMask);
 
-  if (Data xor HashCode) and UInt64($000FFFFFFFFFFFFF) = 0 then      // signature matches
+  UID := Table[index].UID;
+  Data := Table[index].Data;
+
+  if (UID xor Data) = HashCode then
     begin
-    score := Int64(UInt64(Data) shr 52) - 2048;
+    score := integer(Data and $FFFF) - 32768;
+    Passers := (Data shr 8) and UInt64($00FFFFFFFFFFFF00);
     exit(true);
     end;
-
-  result := false;
   end;
 
 
@@ -804,27 +858,54 @@ procedure T_PawnHash_Table.ClearTable;
 
   begin
   for i := 0 to TableSize - 1 do
-    Table[i] := 0;
+    begin
+    Table[i].Data := 0;
+    end;
   end;
 
 
 // ====================== misc functions =======================================
 
 
-function Distance(Cell1, Cell2 : integer) : integer;         inline;
+function Distance(Cell1, Cell2 : integer) : integer;    inline;
   begin
   result := max( abs(Cell1 shr 3 - Cell2 shr 3), abs(Cell1 and $7 - Cell2 and $7));
   end;
 
 
+function FileMask(Cell : integer) : UInt64;             inline;
+  begin
+  result := UInt64($0101010101010101) shl (Cell and $7);
+  end;
+
+
+function RankMask(Cell : integer) : UInt64;             inline;
+  begin
+  result := UInt64($00000000000000FF) shl ((Cell shr 3) * 8);
+  end;
+
+
+function RanksBelowMask(rank : integer) : UInt64;     inline
+  begin
+  result := UInt64($00FFFFFFFFFFFFFF) shr (56 - rank * 8);
+  end;
+
+
+function RanksAboveMask(rank : integer) : UInt64;     inline
+  begin
+  result := UInt64($FFFFFFFFFFFFFF00) shl (rank * 8);
+  end;
+
+
 // ===================== pawn Eval functions ===================================
+
 
 function IsOpenFile(const Board : TBoard; Cell : integer) : boolean;
 
   // An open file is one with no pawns on it
 
   begin
-  result := BitCount(FileMask[Cell and $7] and Board.Pawns) = 0
+  result := BitCount(FileMask(Cell) and Board.Pawns) = 0
   end;
 
 
@@ -834,9 +915,9 @@ function IsSemiOpenFile(const Board : TBoard; Player, Cell : integer) : boolean;
 
   begin
   if Player = white then
-    result := BitCount(FileMask[Cell and $7] and Board.WhitePegs and Board.Pawns) = 0
+    result := BitCount(FileMask(Cell) and Board.WhitePegs and Board.Pawns) = 0
    else
-    result := BitCount(FileMask[Cell and $7] and Board.BlackPegs and Board.Pawns) = 0;
+    result := BitCount(FileMask(Cell) and Board.BlackPegs and Board.Pawns) = 0;
   end;
 
 
@@ -854,7 +935,7 @@ function IsIsolatedPawn(const Board : TBoard; Player, Cell : integer) : boolean;
 
 function IsDoubledPawn(const Board : TBoard; Player, Cell : integer) : boolean;
 
-  // A pawn is doubled (or, tripled) if there are more pawns of the same color on a given file
+  // A Pawn is doubled (or, tripled) if there are more pawns of the same color on a given file
 
   begin
   if Player = white then
@@ -919,14 +1000,15 @@ function IsBackwardPawn(const Board : TBoard; Player, Cell : integer) : boolean;
   end;
 
 
+
 function PawnsAreSpread(const Board : TBoard; Player : integer) : boolean;
 
   // player has pawns distributed on both sides of board
   // i.e. one or more pawns on files <= 4 and at same time one or more pawns on files >= 5
 
   const
-    LeftMask =  $0F0F0F0F0F0F0F0F;
-    RightMask = $F0F0F0F0F0F0F0F0;
+    LeftMask =  UInt64($0F0F0F0F0F0F0F0F);
+    RightMask = UInt64($F0F0F0F0F0F0F0F0);
 
   begin
   if Player = white then
@@ -956,19 +1038,6 @@ function IsPassedPawn(const Board : TBoard; Player, Cell : integer) : boolean;
   end;
 
 
-function IsCandidatePasser(const Board : TBoard; Player, Cell : integer) : boolean;
-
-  // A pawn is a candidate passer if there are no pawns in front of it on same file and
-  // if it advances until it contacts an enemy pawn, it is defended at least as many times as it is attacked.
-
-  begin
-  if Player = white then
-    result := ((bitcount(WhitePassMask[Cell] and Board.BlackPegs and Board.Pawns) <= bitcount(BlackPassMask[Cell-8] and Board.WhitePegs and Board.Pawns)) and (WhiteSpanMask[Cell] and Board.Pawns = 0))
-   else
-    result := ((bitcount(BlackPassMask[Cell] and Board.WhitePegs and Board.Pawns) <=  bitcount(WhitePassMask[Cell+8] and Board.BlackPegs and Board.Pawns)) and (BlackSpanMask[Cell] and Board.Pawns = 0));
-  end;
-
-
 function KingOnKeySquare(const Board : TBoard; Player, Cell : integer) : boolean;
 
   begin
@@ -979,20 +1048,38 @@ function KingOnKeySquare(const Board : TBoard; Player, Cell : integer) : boolean
   end;
 
 
-// Pawns Are Spread : player has pawns distributed on both sides of board     [Bonus]
+// A pawn is Isolated if it has no friendly pawn on an adjacent file.
 
-// A pawn is Passed if there are no opposing pawns to prevent it from advancing to the eighth rank;     [Bonus based on rank and file]
+// A pawn is Doubled when it has another friendly pawn on same file.
+
+// A pawn is Double Isolated if it is doubled and isolated.
+
+// A pawn is Supported if it is protected by pawn behind and to side. (one or two pawns can protect)
+
+// A pawn is part of a Phalanx if there is friendly pawn on adjacent file and same rank.
+
+// A pawn is Connected if Supported or part of Phalanx.
+
+// A pawn is Opposed if there is opponent pawn on the same file in direction of advancement.
+
+// A pawn is Blocked  if there is opponent pawn immediately in front.
+
+// A pawn is Backward when it is behind all pawns of the same color on the adjacent files and cannot be safely advanced.  [Penalty]
+
+// Pawns Are Spread : player has pawns distributed on both sides of board
+
+// A pawn is Passed if there are no opposing pawns to prevent it from advancing to the eighth rank;
 //    i.e. there are no opposing pawns in front of it on either the same file or adjacent files &
 //         there are no own pawns directly in front of it i.e. rear doubled pawn doesn't count.
 
-// A pawn is CandidatePasser if:                                    [Bonus based on rank and file]
+// A pawn is CandidatePasser if:
 //    o  there is no stopper except some levers.
 //    o  the only stoppers are the leverPush, but outnumbered.
 //    o  there is only one front stopper, which can be levered.
 //    o  there are no own pawns in front of it.  i.e. rear doubled pawn doesn't count.
 
 
-function PawnBonus(const Board : TBoard) : integer;
+function PawnBonus(const Board : TBoard; var Passers : UInt64) : integer;
   var
     PawnCell, PromotionCell, OpponentKingCell, FlipCell : integer;
     score, eg_score, mg_score : integer;
@@ -1002,18 +1089,21 @@ function PawnBonus(const Board : TBoard) : integer;
   result := 0;
   mg_score := 0;
   eg_score := 0;
+  Passers := 0;
 
   WhitePawns := Board.WhitePegs and Board.Pawns;
   BlackPawns := Board.BlackPegs and Board.Pawns;
 
+
+  Pegs := WhitePawns;      // white pawns
+
   // if PawnsAreSpread
-  if (Board_Left and WhitePawns <> 0) and (Board_Right and WhitePawns <> 0) then     // bonus for white if pawns are spread
+  if (Board_Left_Half and WhitePawns <> 0) and (Board_Right_Half and WhitePawns <> 0) then     // bonus for white if pawns are spread
     begin
     mg_score := mg_score + PawnWidthBonus_mg * bitcount(WhitePawns);
     eg_score := eg_score + PawnWidthBonus_eg * bitcount(WhitePawns);
     end;
 
-  Pegs := WhitePawns;
   while Pegs <> 0 do
     begin
     PawnCell := PopLowBit_Alt(Pegs);
@@ -1021,17 +1111,8 @@ function PawnBonus(const Board : TBoard) : integer;
     // if IsPassedPawn
     if ((WhitePassMask[PawnCell] and BlackPawns) = 0) and ((WhiteSpanMask[PawnCell] and WhitePawns) = 0) then  // is passed pawn
       begin
+      setBit(Passers, PawnCell);
       result := result + PassedPawn_Table[PawnCell];
-
-      OpponentKingCell := GetLowBit_Alt(Board.Kings and Board.BlackPegs);    // check if opponent king outside 'pawn square' & give bonus if so
-      PromotionCell := PawnCell and $7;
-
-      if min(5, Distance(PawnCell, PromotionCell)) < Distance(OpponentKingCell, PromotionCell) - Board.ToPlay then
-        result := result + UnstoppableBonus;
-
-      // if KingOnKeySquare
-      if  ((WhiteKeySqrMask[PawnCell] and Board.WhitePegs and Board.Kings) <> 0) then
-        result := result + KingEscortBonus;
       end;
 
     // if IsIsolatedPawn
@@ -1073,18 +1154,19 @@ function PawnBonus(const Board : TBoard) : integer;
         eg_score := eg_score + BlockedOnRank7Penalty_eg;
         end;
       end;
-
     end;
 
 
+
+  Pegs := BlackPawns;    // black pawns
+
   // if PawnsAreSpread
-  if (Board_Left and BlackPawns <> 0) and (Board_Right and BlackPawns <> 0) then     // bonus for black if pawns are spread
+  if (Board_Left_Half and BlackPawns <> 0) and (Board_Right_Half and BlackPawns <> 0) then     // bonus for black if pawns are spread
     begin
     mg_score := mg_score - PawnWidthBonus_mg * bitcount(BlackPawns);
     eg_score := eg_score - PawnWidthBonus_eg * bitcount(BlackPawns);
     end;
 
-  Pegs := BlackPawns;
   while Pegs <> 0 do
     begin
     PawnCell := PopLowBit_Alt(Pegs);
@@ -1093,16 +1175,8 @@ function PawnBonus(const Board : TBoard) : integer;
     // if IsPassedPawn
     if ((BlackPassMask[PawnCell] and WhitePawns) = 0) and ((BlackSpanMask[PawnCell] and BlackPawns) = 0) then
       begin
+      setBit(Passers, PawnCell);
       result := result - PassedPawn_Table[FlipCell];
-
-      OpponentKingCell := GetLowBit_Alt(Board.Kings and Board.WhitePegs);    // check if opponent king outside 'pawn square' & give bonus if so
-      PromotionCell := (PawnCell and $7) + 56;
-      if min(5, Distance(PawnCell, PromotionCell)) < Distance(OpponentKingCell, PromotionCell) - (1 - Board.ToPlay) then
-        result := result - UnstoppableBonus;
-
-      // if KingOnKeySquare
-      if  ((BlackKeySqrMask[PawnCell] and Board.BlackPegs and Board.Kings) <> 0) then
-        result := result - KingEscortBonus;
       end;
 
     // if IsIsolatedPawn
@@ -1147,26 +1221,25 @@ function PawnBonus(const Board : TBoard) : integer;
     end;
 
   score := (mg_score * Board.GameStage + eg_score * (64 - Board.GameStage)) div 64;
-
   result := result + score;
   end;
 
- 
 
-function EvalCalc(const Board : TBoard) : integer;
+function EvalCalc(const Board : TBoard; Passers : UInt64) : integer;
 
   var
     WhiteMobBoard, BlackMobBoard, SourcePegs, Moves, BlackKingPrecinct, WhiteKingPrecinct : UInt64;
     WhitePinned, BlackPinned : UInt64;
-    SourceCell, FlipCell, WhiteKingCell, BlackKingCell, PawnCell, WhiteKingAttackIndex, BlackKingAttackIndex : integer;
+    SourceCell, FlipCell, WhiteKingCell, BlackKingCell, PawnCell, PromotionCell, Rank : integer;
+    WhiteKingAttackIndex, BlackKingAttackIndex : integer;
     Mobility : integer;
     BlackPrecinctPawnCount, WhitePrecinctPawnCount, BlackPrecinctIndex, WhitePrecinctIndex, WhiteKingRegion, BlackKingRegion : integer;
-    index, PST, PST_mg, PST_eg, MatBal, AttackBonus, piececount, PieceBonus, Tempo, KingAttack, DefenderBonus : integer;
+    index, PST, PST_mg, PST_eg, MatBal, AttackBonus, piececount, PieceBonus, Tempo, KingAttack, DefenderBonus, PassedPawnBonus : integer;
     dQ, dR, dB, dN, Pdif, Ndif, Bdif, Rdif, Qdif : integer;
     WhiteKingThreat, BlackKingThreat, WhiteKingKnightThreat, BlackKingKnightThreat, WhiteKingRookThreat, BlackKingRookThreat, WhiteKingBishopThreat, BlackKingBishopThreat : UInt64;
-    TempMoves : UInt64;
+    TempMoves, AdvanceMove, AttackedbyWhite, AttackedbyBlack, PawnAdvancePeg : UInt64;
 
-   // Observation : Eval is rarely required to evaluate a position that is giving check - as it is called by QSearch only on quiet positions
+   // Observation : Eval is never required to evaluate a position that is in check - as it is called only on quiet positions
 
   begin
   PST := 0;
@@ -1178,19 +1251,20 @@ function EvalCalc(const Board : TBoard) : integer;
   PieceBonus := 0;
   KingAttack := 0;
   DefenderBonus := 0;
+  PassedPawnBonus := 0;
+
+  AttackedbyWhite := 0;
+  AttackedbyBlack := 0;
 
   BlackKingCell := GetLowBit_Alt(Board.Kings and Board.BlackPegs);
   WhiteKingCell := GetLowBit_Alt(Board.Kings and Board.WhitePegs);
 
   WhiteKingRookThreat := Board.RookAttack_asm(WhiteKingCell);
   BlackKingRookThreat := Board.RookAttack_asm(BlackKingCell);
-
   WhiteKingBishopThreat := Board.BishopAttack_asm(WhiteKingCell);
   BlackKingBishopThreat := Board.BishopAttack_asm(BlackKingCell);
-
   WhiteKingThreat := WhiteKingRookThreat or WhiteKingBishopThreat;
   BlackKingThreat := BlackKingRookThreat or BlackKingBishopThreat;
-
   WhiteKingKnightThreat := Board.KnightAttack(WhiteKingCell);
   BlackKingKnightThreat := Board.KnightAttack(BlackKingCell);
 
@@ -1204,13 +1278,13 @@ function EvalCalc(const Board : TBoard) : integer;
   WhitePrecinctPawnCount := min(4, bitcount(Board.Pawns and Board.WhitePegs and WhiteKingPrecinct));
   WhitePinned := Board.GetPinnedPegs(Board.WhitePegs);
 
-
   BlackKingAttackIndex := 0;
   BlackMobBoard := Board.MobilityBoard(Black);
   BlackKingPrecinct := Board.KingMask[BlackKingCell];
   BlackPrecinctIndex := KingPrecinctIndex[BlackKingCell];
   BlackPrecinctPawnCount := min(4, bitcount(Board.Pawns and Board.BlackPegs and BlackKingPrecinct));
   BlackPinned := Board.GetPinnedPegs(Board.BlackPegs);
+
 
   SourcePegs := Board.Knights and Board.WhitePegs;
   piececount := BitCount(SourcePegs);
@@ -1226,7 +1300,7 @@ function EvalCalc(const Board : TBoard) : integer;
     PST_eg := PST_eg + PST_Table_eg[Knight, SourceCell];
 
     Moves := Board.KnightMask[SourceCell];
-
+    AttackedbyWhite := AttackedbyWhite or Moves;
     AttackBonus := AttackBonus + bitcount(Moves and BlackKingKnightThreat and not Board.WhitePegs) * AttackBonus_Knight_King_Threat;
 
     TempMoves := Moves and Board.BlackPegs and not Board.Pawns;
@@ -1237,6 +1311,8 @@ function EvalCalc(const Board : TBoard) : integer;
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Rooks) * AttackBonus_STM[Knight, Rook];
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Bishops) * AttackBonus_STM[Knight, Bishop];
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Knights) * AttackBonus_STM[Knight, Knight];
+
+        AttackBonus := AttackBonus + MultiAttackBonus_STM[Knight, bitcount(TempMoves)];
         end
        else
         begin
@@ -1244,6 +1320,8 @@ function EvalCalc(const Board : TBoard) : integer;
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Rooks) * AttackBonus_OTM[Knight, Rook];
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Bishops) * AttackBonus_OTM[Knight, Bishop];
         //AttackBonus := AttackBonus + bitcount(TempMoves and Board.Knights) * AttackBonus_OTM[Knight, Knight];
+
+        AttackBonus := AttackBonus + MultiAttackBonus_OTM[Knight, bitcount(TempMoves)];
         end;
 
     DefenderBonus := DefenderBonus + bitcount(Moves and Board.WhitePegs) * DefendedByBonus[Knight];
@@ -1256,7 +1334,7 @@ function EvalCalc(const Board : TBoard) : integer;
     BlackKingAttackIndex := BlackKingAttackIndex + bitcount(Moves and BlackKingPrecinct);
 
     if (WhitePinned and (UInt64($1) shl sourceCell)) = 0 then
-      Mobility := Mobility + Knight_Mobility_Eval[BitCount(Moves and WhiteMobBoard)]
+      Mobility := Mobility + Knight_Mobility[BitCount(Moves and WhiteMobBoard)]
      else
       Mobility := Mobility + PinnedKnight_Penalty;
     end;
@@ -1276,7 +1354,7 @@ function EvalCalc(const Board : TBoard) : integer;
     PST_eg := PST_eg + PST_Table_eg[Bishop, SourceCell];
 
     Moves := Board.BishopAttack_asm(SourceCell);
-
+    AttackedbyWhite := AttackedbyWhite or Moves;
     AttackBonus := AttackBonus + bitcount(Moves and BlackKingBishopThreat and not Board.WhitePegs) * AttackBonus_Bishop_King_Threat;
 
     TempMoves := Moves and Board.BlackPegs and not Board.Pawns;
@@ -1287,6 +1365,8 @@ function EvalCalc(const Board : TBoard) : integer;
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Rooks) * AttackBonus_STM[Bishop, Rook];
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Bishops) * AttackBonus_STM[Bishop, Bishop];
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Knights) * AttackBonus_STM[Bishop, Knight];
+
+        AttackBonus := AttackBonus + MultiAttackBonus_STM[Bishop, bitcount(TempMoves)];
         end
        else
         begin
@@ -1294,6 +1374,8 @@ function EvalCalc(const Board : TBoard) : integer;
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Rooks) * AttackBonus_OTM[Bishop, Rook];
         //AttackBonus := AttackBonus + bitcount(TempMoves and Board.Bishops) * AttackBonus_OTM[Bishop, Bishop];
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Knights) * AttackBonus_OTM[Bishop, Knight];
+
+        AttackBonus := AttackBonus + MultiAttackBonus_OTM[Bishop, bitcount(TempMoves)];
         end;
 
     DefenderBonus := DefenderBonus + bitcount(Moves and Board.WhitePegs) * DefendedByBonus[Bishop];
@@ -1310,8 +1392,10 @@ function EvalCalc(const Board : TBoard) : integer;
      else
       PieceBonus := PieceBonus + bitcount(Board.Pawns and Board.WhitePegs and blacksqr) * BishopPawn_Penalty;
 
+    PieceBonus := PieceBonus + bitcount(Moves and WhiteMobBoard and Board_Centre_4) * BishopCentreControl_Bonus;
+
     if (WhitePinned and (UInt64($1) shl sourceCell)) = 0 then
-      Mobility := Mobility + Bishop_Mobility_Eval[BitCount(Moves and WhiteMobBoard)]
+      Mobility := Mobility + Bishop_Mobility[BitCount(Moves and WhiteMobBoard)]
      else
       Mobility := Mobility + PinnedBishop_Penalty;       // pinned so reduced mobility
     end;
@@ -1331,7 +1415,7 @@ function EvalCalc(const Board : TBoard) : integer;
     PST_eg := PST_eg + PST_Table_eg[Rook, SourceCell];
 
     Moves := Board.RookAttack_asm(SourceCell);
-
+    AttackedbyWhite := AttackedbyWhite or Moves;
     AttackBonus := AttackBonus + bitcount(Moves and BlackKingRookThreat and not Board.WhitePegs) * AttackBonus_Rook_King_Threat;
 
     TempMoves := Moves and Board.BlackPegs and not Board.Pawns;
@@ -1342,6 +1426,8 @@ function EvalCalc(const Board : TBoard) : integer;
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Rooks) * AttackBonus_STM[Rook, Rook];
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Bishops) * AttackBonus_STM[Rook, Bishop];
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Knights) * AttackBonus_STM[Rook, Knight];
+
+        AttackBonus := AttackBonus + MultiAttackBonus_STM[Rook, bitcount(TempMoves)];
         end
        else
         begin
@@ -1349,6 +1435,8 @@ function EvalCalc(const Board : TBoard) : integer;
         //AttackBonus := AttackBonus + bitcount(TempMoves and Board.Rooks) * AttackBonus_OTM[Rook, Rook];
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Bishops) * AttackBonus_OTM[Rook, Bishop];
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Knights) * AttackBonus_OTM[Rook, Knight];
+
+        AttackBonus := AttackBonus + MultiAttackBonus_OTM[Rook, bitcount(TempMoves)];
         end;
 
     PST_mg := PST_mg + bitcount(Moves and Board.WhitePegs) * DefendedByBonus[Rook];
@@ -1356,21 +1444,22 @@ function EvalCalc(const Board : TBoard) : integer;
     BlackKingAttackIndex := BlackKingAttackIndex + bitcount(Moves and BlackKingPrecinct);
 
     if (WhitePinned and (UInt64($1) shl sourceCell)) = 0 then
-      Mobility := Mobility + Rook_Mobility_Eval[BitCount(Moves and WhiteMobBoard)]
+      Mobility := Mobility + Rook_Mobility[BitCount(Moves and WhiteMobBoard)]
      else
       Mobility := Mobility + PinnedRook_Penalty;
 
-    if IsOpenFile(Board, SourceCell) then
+    //if IsOpenFile(Board, SourceCell) then
+    if BitCount(FileMask(SourceCell) and Board.Pawns) = 0 then
       begin
       PST_mg := PST_mg + RookOnOpenFile_Bonus_mg;
       PST_eg := PST_eg + RookOnOpenFile_Bonus_eg;
       end
-     else if IsSemiOpenFile(Board, White, SourceCell) then
+     //else if IsSemiOpenFile(Board, White, SourceCell) then
+     else if BitCount(FileMask(SourceCell) and Board.WhitePegs and Board.Pawns) = 0 then
       begin
       PST_mg := PST_mg + RookOnSemiOpenFile_Bonus_mg;
       PST_eg := PST_eg + RookOnSemiOpenFile_Bonus_eg;
       end;
-
     end;
 
 
@@ -1384,10 +1473,12 @@ function EvalCalc(const Board : TBoard) : integer;
   while SourcePegs <> 0 do
     begin
     SourceCell := PopLowBit_Alt(SourcePegs);
+
     PST_mg := PST_mg + PST_Table_mg[Queen, SourceCell];
     PST_eg := PST_eg + PST_Table_eg[Queen, SourceCell];
 
     Moves := Board.QueenAttack(SourceCell);
+    AttackedbyWhite := AttackedbyWhite or Moves;
 
     if Board.ToPlay = white then
       AttackBonus := AttackBonus + bitcount(Moves and BlackKingThreat) * AttackBonus_Queen_King_Threat_STM
@@ -1402,6 +1493,8 @@ function EvalCalc(const Board : TBoard) : integer;
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Rooks) * AttackBonus_STM[Queen, Rook];
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Bishops) * AttackBonus_STM[Queen, Bishop];
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Knights) * AttackBonus_STM[Queen, Knight];
+
+        AttackBonus := AttackBonus + MultiAttackBonus_STM[Queen, bitcount(TempMoves)];
         end
        else
         begin
@@ -1409,6 +1502,8 @@ function EvalCalc(const Board : TBoard) : integer;
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Rooks) * AttackBonus_OTM[Queen, Rook];
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Bishops) * AttackBonus_OTM[Queen, Bishop];
         AttackBonus := AttackBonus + bitcount(TempMoves and Board.Knights) * AttackBonus_OTM[Queen, Knight];
+
+        AttackBonus := AttackBonus + MultiAttackBonus_OTM[Queen, bitcount(TempMoves)];
         end;
 
     PST_mg := PST_mg + bitcount(Moves and Board.WhitePegs) * DefendedByBonus[Queen];
@@ -1416,7 +1511,7 @@ function EvalCalc(const Board : TBoard) : integer;
     BlackKingAttackIndex := BlackKingAttackIndex + bitcount(Moves and BlackKingPrecinct);
 
     if (WhitePinned and (UInt64($1) shl sourceCell)) = 0 then
-      Mobility := Mobility + Queen_Mobility_Eval[BitCount(Moves and WhiteMobBoard)]
+      Mobility := Mobility + Queen_Mobility[BitCount(Moves and WhiteMobBoard)]
      else
       begin
       if Board.ToPlay = white then
@@ -1432,36 +1527,58 @@ function EvalCalc(const Board : TBoard) : integer;
   Pdif := piececount;
   MatBal := MatBal + Material_Table[index, piececount];
 
+  Moves := ((SourcePegs and not Board_RightEdge) shr 7);
+  AttackedbyWhite := AttackedbyWhite or Moves;
+  TempMoves := Moves and Board.BlackPegs and not Board.Pawns;
+  if TempMoves <> 0 then
+    if Board.ToPlay = white then
+      begin
+      AttackBonus := AttackBonus + bitcount(TempMoves and Board.Queens) * AttackBonus_STM[Pawn, Queen];
+      AttackBonus := AttackBonus + bitcount(TempMoves and Board.Rooks) * AttackBonus_STM[Pawn, Rook];
+      AttackBonus := AttackBonus + bitcount(TempMoves and Board.Bishops) * AttackBonus_STM[Pawn, Bishop];
+      AttackBonus := AttackBonus + bitcount(TempMoves and Board.Knights) * AttackBonus_STM[Pawn, Knight];
+      end
+     else
+      begin
+      AttackBonus := AttackBonus + bitcount(TempMoves and Board.Queens) * AttackBonus_OTM[Pawn, Queen];
+      AttackBonus := AttackBonus + bitcount(TempMoves and Board.Rooks) * AttackBonus_OTM[Pawn, Rook];
+      AttackBonus := AttackBonus + bitcount(TempMoves and Board.Bishops) * AttackBonus_OTM[Pawn, Bishop];
+      AttackBonus := AttackBonus + bitcount(TempMoves and Board.Knights) * AttackBonus_OTM[Pawn, Knight];
+      end;
+
+  DefenderBonus := DefenderBonus + bitcount(Moves and Board.WhitePegs) * DefendedByBonus[Pawn];
+
+  BlackKingAttackIndex := BlackKingAttackIndex + bitcount(Moves and BlackKingPrecinct);
+
+  Moves := ((SourcePegs and not Board_LeftEdge) shr 9);
+  AttackedbyWhite := AttackedbyWhite or Moves;
+  TempMoves := Moves and Board.BlackPegs and not Board.Pawns;
+  if TempMoves <> 0 then
+    if Board.ToPlay = white then
+      begin
+      AttackBonus := AttackBonus + bitcount(TempMoves and Board.Queens) * AttackBonus_STM[Pawn, Queen];
+      AttackBonus := AttackBonus + bitcount(TempMoves and Board.Rooks) * AttackBonus_STM[Pawn, Rook];
+      AttackBonus := AttackBonus + bitcount(TempMoves and Board.Bishops) * AttackBonus_STM[Pawn, Bishop];
+      AttackBonus := AttackBonus + bitcount(TempMoves and Board.Knights) * AttackBonus_STM[Pawn, Knight];
+      end
+     else
+      begin
+      AttackBonus := AttackBonus + bitcount(TempMoves and Board.Queens) * AttackBonus_OTM[Pawn, Queen];
+      AttackBonus := AttackBonus + bitcount(TempMoves and Board.Rooks) * AttackBonus_OTM[Pawn, Rook];
+      AttackBonus := AttackBonus + bitcount(TempMoves and Board.Bishops) * AttackBonus_OTM[Pawn, Bishop];
+      AttackBonus := AttackBonus + bitcount(TempMoves and Board.Knights) * AttackBonus_OTM[Pawn, Knight];
+      end;
+
+  DefenderBonus := DefenderBonus + bitcount(Moves and Board.WhitePegs) * DefendedByBonus[Pawn];
+
+  BlackKingAttackIndex := BlackKingAttackIndex + bitcount(Moves and BlackKingPrecinct);
+
   while SourcePegs <> 0 do
     begin
     SourceCell := PopLowBit_Alt(SourcePegs);
     PST_mg := PST_mg + PST_Table_Pawn_mg[WhiteKingRegion, SourceCell];
     PST_eg := PST_eg + PST_Table_Pawn_eg[WhiteKingRegion, SourceCell];
-
-    Moves := Board.WhitePawnCaptures[SourceCell] ;
-
-    TempMoves := Moves and Board.BlackPegs and not Board.Pawns;
-    if TempMoves <> 0 then
-      if Board.ToPlay = white then
-        begin
-        AttackBonus := AttackBonus + bitcount(TempMoves and Board.Queens) * AttackBonus_STM[Pawn, Queen];
-        AttackBonus := AttackBonus + bitcount(TempMoves and Board.Rooks) * AttackBonus_STM[Pawn, Rook];
-        AttackBonus := AttackBonus + bitcount(TempMoves and Board.Bishops) * AttackBonus_STM[Pawn, Bishop];
-        AttackBonus := AttackBonus + bitcount(TempMoves and Board.Knights) * AttackBonus_STM[Pawn, Knight];
-        end
-       else
-        begin
-        AttackBonus := AttackBonus + bitcount(TempMoves and Board.Queens) * AttackBonus_OTM[Pawn, Queen];
-        AttackBonus := AttackBonus + bitcount(TempMoves and Board.Rooks) * AttackBonus_OTM[Pawn, Rook];
-        AttackBonus := AttackBonus + bitcount(TempMoves and Board.Bishops) * AttackBonus_OTM[Pawn, Bishop];
-        AttackBonus := AttackBonus + bitcount(TempMoves and Board.Knights) * AttackBonus_OTM[Pawn, Knight];
-        end;
-
-    DefenderBonus := DefenderBonus + bitcount(Moves and Board.WhitePegs) * DefendedByBonus[Pawn];
-
-    BlackKingAttackIndex := BlackKingAttackIndex + bitcount(Moves and BlackKingPrecinct);
     end;
-
 
   SourcePegs := Board.WhitePegs and Board.Kings;
   SourceCell := PopLowBit_Alt(SourcePegs);
@@ -1469,22 +1586,24 @@ function EvalCalc(const Board : TBoard) : integer;
   PST_mg := PST_mg + PST_Table_mg[King, SourceCell];
   PST_eg := PST_eg + PST_Table_eg[King, SourceCell];
 
-  if IsOpenFile(Board, SourceCell) then
+  //if IsOpenFile(Board, SourceCell) then
+  if BitCount(FileMask(SourceCell) and Board.Pawns) = 0 then
     begin
     PST_mg := PST_mg + KingOnOpenFile_Penalty_mg;
     PST_eg := PST_eg + KingOnOpenFile_Penalty_eg;
     end;
 
-  if IsSemiOpenFile(Board, White, SourceCell) then
+  //if IsSemiOpenFile(Board, White, SourceCell) then
+  if BitCount(FileMask(SourceCell) and Board.WhitePegs and Board.Pawns) = 0 then
     begin
     PST_mg := PST_mg + KingOnSemiOpenFile_Penalty_mg;
     PST_eg := PST_eg + KingOnSemiOpenFile_Penalty_eg;
     end;
 
-  Moves := Board.KingAttack(SourceCell) and Board.BlackPegs and Board.Pawns;
+  Moves := Board.KingMask[SourceCell] and Board.BlackPegs and Board.Pawns;
   AttackBonus := AttackBonus + bitcount(Moves) * AttackBonus_King_Pawn;
 
-  Moves := Board.QueenAttack(SourceCell) and not Board.WhitePegs;
+  Moves := WhiteKingThreat and not Board.WhitePegs;
   PST_mg := PST_mg + KingExposure_Penalty_mg[WhitePrecinctIndex, bitcount(moves)];
   PST_eg := PST_eg + KingExposure_Penalty_eg[WhitePrecinctIndex, bitcount(moves)];
 
@@ -1502,6 +1621,7 @@ function EvalCalc(const Board : TBoard) : integer;
     PST_eg := PST_eg + KingAdjExposure_Penalty_eg[WhitePrecinctIndex, bitcount(moves)];
     end;
 
+  AttackedbyWhite := AttackedbyWhite and not Board.WhitePegs;
 
   //===========================================================================
 
@@ -1522,7 +1642,7 @@ function EvalCalc(const Board : TBoard) : integer;
     PST_eg := PST_eg - PST_Table_eg[Knight, FlipCell];
 
     Moves := Board.KnightMask[SourceCell];
-
+    AttackedbyBlack := AttackedbyBlack or Moves;
     AttackBonus := AttackBonus - bitcount(Moves and WhiteKingKnightThreat and not Board.BlackPegs) * AttackBonus_Knight_King_Threat;
 
     TempMoves := Moves and Board.WhitePegs and not Board.Pawns;
@@ -1533,6 +1653,8 @@ function EvalCalc(const Board : TBoard) : integer;
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Rooks) * AttackBonus_STM[Knight, Rook];
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Bishops) * AttackBonus_STM[Knight, Bishop];
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Knights) * AttackBonus_STM[Knight, Knight];
+
+        AttackBonus := AttackBonus - MultiAttackBonus_STM[Knight, bitcount(TempMoves)];
         end
        else
         begin
@@ -1540,6 +1662,8 @@ function EvalCalc(const Board : TBoard) : integer;
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Rooks) * AttackBonus_OTM[Knight, Rook];
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Bishops) * AttackBonus_OTM[Knight, Bishop];
         //AttackBonus := AttackBonus - bitcount(TempMoves and Board.Knights) * AttackBonus_OTM[Knight, Knight];
+
+        AttackBonus := AttackBonus - MultiAttackBonus_OTM[Knight, bitcount(TempMoves)];
         end;
 
     DefenderBonus := DefenderBonus - bitcount(Moves and Board.BlackPegs) * DefendedByBonus[Knight];
@@ -1552,7 +1676,7 @@ function EvalCalc(const Board : TBoard) : integer;
     WhiteKingAttackIndex := WhiteKingAttackIndex + bitcount(Moves and WhiteKingPrecinct);
 
     if (BlackPinned and (UInt64($1) shl sourceCell)) = 0 then
-      Mobility := Mobility - Knight_Mobility_Eval[BitCount(Moves and BlackMobBoard)]
+      Mobility := Mobility - Knight_Mobility[BitCount(Moves and BlackMobBoard)]
      else
       Mobility := Mobility - PinnedKnight_Penalty;
     end;
@@ -1574,7 +1698,7 @@ function EvalCalc(const Board : TBoard) : integer;
     PST_eg := PST_eg - PST_Table_eg[Bishop, FlipCell];
 
     Moves := Board.BishopAttack_asm(SourceCell);
-
+    AttackedbyBlack := AttackedbyBlack or Moves;
     AttackBonus := AttackBonus - bitcount(Moves and WhiteKingBishopThreat and not Board.BlackPegs) * AttackBonus_Bishop_King_Threat;
 
     TempMoves := Moves and Board.WhitePegs and not Board.Pawns;
@@ -1585,6 +1709,8 @@ function EvalCalc(const Board : TBoard) : integer;
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Rooks) * AttackBonus_STM[Bishop, Rook];
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Bishops) * AttackBonus_STM[Bishop, Bishop];
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Knights) * AttackBonus_STM[Bishop, Knight];
+
+        AttackBonus := AttackBonus - MultiAttackBonus_STM[Bishop, bitcount(TempMoves)];
         end
        else
         begin
@@ -1592,6 +1718,8 @@ function EvalCalc(const Board : TBoard) : integer;
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Rooks) * AttackBonus_OTM[Bishop,  Rook];
         //AttackBonus := AttackBonus - bitcount(TempMoves and Board.Bishops) * AttackBonus_OTM[Bishop, Bishop];
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Knights) * AttackBonus_OTM[Bishop, Knight];
+
+        AttackBonus := AttackBonus - MultiAttackBonus_OTM[Bishop, bitcount(TempMoves)];
         end;
 
     DefenderBonus := DefenderBonus - bitcount(Moves and Board.BlackPegs) * DefendedByBonus[Bishop];
@@ -1608,8 +1736,10 @@ function EvalCalc(const Board : TBoard) : integer;
      else
       PieceBonus := PieceBonus - bitcount(Board.Pawns and Board.BlackPegs and blacksqr) * BishopPawn_Penalty;
 
+    PieceBonus := PieceBonus - bitcount(Moves and BlackMobBoard and Board_Centre_4) * BishopCentreControl_Bonus;
+
     if (BlackPinned and (UInt64($1) shl sourceCell)) = 0 then
-      Mobility := Mobility - Bishop_Mobility_Eval[BitCount(Moves and BlackMobBoard)]
+      Mobility := Mobility - Bishop_Mobility[BitCount(Moves and BlackMobBoard)]
      else
       Mobility := Mobility - PinnedBishop_Penalty;
     end;
@@ -1631,7 +1761,7 @@ function EvalCalc(const Board : TBoard) : integer;
     PST_eg := PST_eg - PST_Table_eg[Rook, FlipCell];
 
     Moves := Board.RookAttack_asm(SourceCell);
-
+    AttackedbyBlack := AttackedbyBlack or Moves;
     AttackBonus := AttackBonus - bitcount(Moves and WhiteKingRookThreat and not Board.BlackPegs) * AttackBonus_Rook_King_Threat;
 
     TempMoves := Moves and Board.WhitePegs and not Board.Pawns;
@@ -1642,6 +1772,8 @@ function EvalCalc(const Board : TBoard) : integer;
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Rooks) * AttackBonus_STM[Rook, Rook];
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Bishops) * AttackBonus_STM[Rook, Bishop];
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Knights) * AttackBonus_STM[Rook, Knight];
+
+        AttackBonus := AttackBonus - MultiAttackBonus_STM[Rook, bitcount(TempMoves)];
         end
        else
         begin
@@ -1649,6 +1781,8 @@ function EvalCalc(const Board : TBoard) : integer;
         //AttackBonus := AttackBonus - bitcount(TempMoves and Board.Rooks) * AttackBonus_OTM[Rook, Rook];
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Bishops) * AttackBonus_OTM[Rook, Bishop];
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Knights) * AttackBonus_OTM[Rook, Knight];
+
+        AttackBonus := AttackBonus - MultiAttackBonus_OTM[Rook, bitcount(TempMoves)];
         end;
 
     PST_mg := PST_mg - bitcount(Moves and Board.BlackPegs) * DefendedByBonus[Rook];
@@ -1656,22 +1790,24 @@ function EvalCalc(const Board : TBoard) : integer;
     WhiteKingAttackIndex := WhiteKingAttackIndex + bitcount(Moves and WhiteKingPrecinct);
 
     if (BlackPinned and (UInt64($1) shl sourceCell)) = 0 then
-      Mobility := Mobility - Rook_Mobility_Eval[BitCount(Moves and BlackMobBoard)]
+      Mobility := Mobility - Rook_Mobility[BitCount(Moves and BlackMobBoard)]
      else
       Mobility := Mobility - PinnedRook_Penalty;
 
-    if IsOpenFile(Board, SourceCell) then
+    //if IsOpenFile(Board, SourceCell) then
+    if BitCount(FileMask(SourceCell) and Board.Pawns) = 0 then
       begin
       PST_mg := PST_mg - RookOnOpenFile_Bonus_mg;
       PST_eg := PST_eg - RookOnOpenFile_Bonus_eg;
       end
-     else if IsSemiOpenFile(Board, Black, SourceCell) then
+    // else if IsSemiOpenFile(Board, Black, SourceCell) then
+     else if BitCount(FileMask(SourceCell) and Board.BlackPegs and Board.Pawns) = 0 then
       begin
       PST_mg := PST_mg - RookOnSemiOpenFile_Bonus_mg;
       PST_eg := PST_eg - RookOnSemiOpenFile_Bonus_eg;
       end;
-
     end;
+
 
   SourcePegs := Board.Queens and Board.BlackPegs;
   piececount := BitCount(SourcePegs);
@@ -1689,6 +1825,7 @@ function EvalCalc(const Board : TBoard) : integer;
     PST_eg := PST_eg - PST_Table_eg[Queen, FlipCell];
 
     Moves := Board.QueenAttack(SourceCell);
+    AttackedbyBlack := AttackedbyBlack or Moves;
 
     if Board.ToPlay = black then
       AttackBonus := AttackBonus - bitcount(Moves and WhiteKingThreat) * AttackBonus_Queen_King_Threat_STM
@@ -1703,6 +1840,8 @@ function EvalCalc(const Board : TBoard) : integer;
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Rooks) * AttackBonus_STM[Queen, Rook];
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Bishops) * AttackBonus_STM[Queen, Bishop];
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Knights) * AttackBonus_STM[Queen, Knight];
+
+        AttackBonus := AttackBonus - MultiAttackBonus_STM[Queen, bitcount(TempMoves)];
         end
        else
         begin
@@ -1710,6 +1849,8 @@ function EvalCalc(const Board : TBoard) : integer;
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Rooks) * AttackBonus_OTM[Queen, Rook];
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Bishops) * AttackBonus_OTM[Queen, Bishop];
         AttackBonus := AttackBonus - bitcount(TempMoves and Board.Knights) * AttackBonus_OTM[Queen, Knight];
+
+        AttackBonus := AttackBonus - MultiAttackBonus_OTM[Queen, bitcount(TempMoves)];
         end;
 
     PST_mg := PST_mg - bitcount(Moves and Board.BlackPegs) * DefendedByBonus[Queen];
@@ -1717,7 +1858,7 @@ function EvalCalc(const Board : TBoard) : integer;
     WhiteKingAttackIndex := WhiteKingAttackIndex + bitcount(Moves and WhiteKingPrecinct);
 
     if (BlackPinned and (UInt64($1) shl sourceCell)) = 0 then
-      Mobility := Mobility - Queen_Mobility_Eval[BitCount(Moves and BlackMobBoard)]
+      Mobility := Mobility - Queen_Mobility[BitCount(Moves and BlackMobBoard)]
      else
       begin
       if Board.ToPlay = black then
@@ -1733,6 +1874,50 @@ function EvalCalc(const Board : TBoard) : integer;
   Pdif := Pdif - piececount;
   MatBal := MatBal - Material_Table[index, piececount];
 
+  Moves := ((SourcePegs and not Board_RightEdge) shl 9);
+  AttackedbyBlack := AttackedbyBlack or Moves;
+  TempMoves := Moves and Board.WhitePegs and not Board.Pawns;
+  if TempMoves <> 0 then
+    if Board.ToPlay = black then
+      begin
+      AttackBonus := AttackBonus - bitcount(TempMoves and Board.Queens) * AttackBonus_STM[Pawn, Queen];
+      AttackBonus := AttackBonus - bitcount(TempMoves and Board.Rooks) * AttackBonus_STM[Pawn, Rook];
+      AttackBonus := AttackBonus - bitcount(TempMoves and Board.Bishops) * AttackBonus_STM[Pawn, Bishop];
+      AttackBonus := AttackBonus - bitcount(TempMoves and Board.Knights) * AttackBonus_STM[Pawn, Knight];
+      end
+     else
+      begin
+      AttackBonus := AttackBonus - bitcount(TempMoves and Board.Queens) * AttackBonus_OTM[Pawn, Queen];
+      AttackBonus := AttackBonus - bitcount(TempMoves and Board.Rooks) * AttackBonus_OTM[Pawn, Rook];
+      AttackBonus := AttackBonus - bitcount(TempMoves and Board.Bishops) * AttackBonus_OTM[Pawn, Bishop];
+      AttackBonus := AttackBonus - bitcount(TempMoves and Board.Knights) * AttackBonus_OTM[Pawn, Knight];
+      end;
+
+  DefenderBonus := DefenderBonus - bitcount(Moves and Board.BlackPegs) * DefendedByBonus[Pawn];
+  WhiteKingAttackIndex := WhiteKingAttackIndex + bitcount(Moves and WhiteKingPrecinct);
+
+  Moves := ((SourcePegs and not Board_LeftEdge) shl 7);
+  AttackedbyBlack := AttackedbyBlack or Moves;
+  TempMoves := Moves and Board.WhitePegs and not Board.Pawns;
+  if TempMoves <> 0 then
+    if Board.ToPlay = black then
+      begin
+      AttackBonus := AttackBonus - bitcount(TempMoves and Board.Queens) * AttackBonus_STM[Pawn, Queen];
+      AttackBonus := AttackBonus - bitcount(TempMoves and Board.Rooks) * AttackBonus_STM[Pawn, Rook];
+      AttackBonus := AttackBonus - bitcount(TempMoves and Board.Bishops) * AttackBonus_STM[Pawn, Bishop];
+      AttackBonus := AttackBonus - bitcount(TempMoves and Board.Knights) * AttackBonus_STM[Pawn, Knight];
+      end
+     else
+      begin
+      AttackBonus := AttackBonus - bitcount(TempMoves and Board.Queens) * AttackBonus_OTM[Pawn, Queen];
+      AttackBonus := AttackBonus - bitcount(TempMoves and Board.Rooks) * AttackBonus_OTM[Pawn, Rook];
+      AttackBonus := AttackBonus - bitcount(TempMoves and Board.Bishops) * AttackBonus_OTM[Pawn, Bishop];
+      AttackBonus := AttackBonus - bitcount(TempMoves and Board.Knights) * AttackBonus_OTM[Pawn, Knight];
+      end;
+
+  DefenderBonus := DefenderBonus - bitcount(Moves and Board.BlackPegs) * DefendedByBonus[Pawn];
+  WhiteKingAttackIndex := WhiteKingAttackIndex + bitcount(Moves and WhiteKingPrecinct);
+
   while SourcePegs <> 0 do
     begin
     SourceCell := PopLowBit_Alt(SourcePegs);
@@ -1740,29 +1925,6 @@ function EvalCalc(const Board : TBoard) : integer;
 
     PST_mg := PST_mg - PST_Table_Pawn_mg[BlackKingRegion, FlipCell];
     PST_eg := PST_eg - PST_Table_Pawn_eg[BlackKingRegion, FlipCell];
-
-    Moves := Board.BlackPawnCaptures[SourceCell];
-
-    TempMoves := Moves and Board.WhitePegs and not Board.Pawns;
-    if TempMoves <> 0 then
-      if Board.ToPlay = black then
-        begin
-        AttackBonus := AttackBonus - bitcount(TempMoves and Board.Queens) * AttackBonus_STM[Pawn, Queen];
-        AttackBonus := AttackBonus - bitcount(TempMoves and Board.Rooks) * AttackBonus_STM[Pawn, Rook];
-        AttackBonus := AttackBonus - bitcount(TempMoves and Board.Bishops) * AttackBonus_STM[Pawn, Bishop];
-        AttackBonus := AttackBonus - bitcount(TempMoves and Board.Knights) * AttackBonus_STM[Pawn, Knight];
-        end
-       else
-        begin
-        AttackBonus := AttackBonus - bitcount(TempMoves and Board.Queens) * AttackBonus_OTM[Pawn, Queen];
-        AttackBonus := AttackBonus - bitcount(TempMoves and Board.Rooks) * AttackBonus_OTM[Pawn, Rook];
-        AttackBonus := AttackBonus - bitcount(TempMoves and Board.Bishops) * AttackBonus_OTM[Pawn, Bishop];
-        AttackBonus := AttackBonus - bitcount(TempMoves and Board.Knights) * AttackBonus_OTM[Pawn, Knight];
-        end;
-
-    DefenderBonus := DefenderBonus - bitcount(Moves and Board.BlackPegs) * DefendedByBonus[Pawn];
-
-    WhiteKingAttackIndex := WhiteKingAttackIndex + bitcount(Moves and WhiteKingPrecinct);
     end;
 
 
@@ -1773,22 +1935,24 @@ function EvalCalc(const Board : TBoard) : integer;
   PST_mg := PST_mg - PST_Table_mg[King, FlipCell];
   PST_eg := PST_eg - PST_Table_eg[King, FlipCell];
 
-  if IsOpenFile(Board, SourceCell) then
+  //if IsOpenFile(Board, SourceCell) then
+  if BitCount(FileMask(SourceCell) and Board.Pawns) = 0 then
     begin
     PST_mg := PST_mg - KingOnOpenFile_Penalty_mg;
     PST_eg := PST_eg - KingOnOpenFile_Penalty_eg;
     end;
 
-  if IsSemiOpenFile(Board, Black, SourceCell) then
+  //if IsSemiOpenFile(Board, Black, SourceCell) then
+  if BitCount(FileMask(SourceCell) and Board.BlackPegs and Board.Pawns) = 0 then
     begin
     PST_mg := PST_mg - KingOnSemiOpenFile_Penalty_mg;
     PST_eg := PST_eg - KingOnSemiOpenFile_Penalty_eg;
     end;
 
-  Moves := Board.KingAttack(SourceCell) and Board.WhitePegs and Board.Pawns;
+  Moves := Board.KingMask[SourceCell] and Board.WhitePegs and Board.Pawns;
   AttackBonus := AttackBonus - bitcount(Moves) * AttackBonus_King_Pawn;
 
-  Moves := Board.QueenAttack(SourceCell) and not Board.BlackPegs;
+  Moves := BlackKingThreat and not Board.BlackPegs;
   PST_mg := PST_mg - KingExposure_Penalty_mg[BlackPrecinctIndex, bitcount(moves)];
   PST_eg := PST_eg - KingExposure_Penalty_eg[BlackPrecinctIndex, bitcount(moves)];
 
@@ -1806,12 +1970,110 @@ function EvalCalc(const Board : TBoard) : integer;
     PST_eg := PST_eg - KingAdjExposure_Penalty_eg[BlackPrecinctIndex, bitcount(moves)];
     end;
 
+  AttackedbyBlack := AttackedbyBlack and not Board.BlackPegs;
+
+  // passed pawns  =============================================================
+
+  SourcePegs := Board.WhitePegs and Board.Pawns and Passers;
+  while SourcePegs <> 0 do
+    begin
+    SourceCell := PopLowBit_Alt(SourcePegs);
+
+    if Board.PawnsOnly(Black) then
+      begin
+      // if path not blocked by own piece
+      if (WhiteSpanMask[SourceCell] and Board.WhitePegs) = 0 then
+        begin
+        // check if opponent king outside 'pawn square' & give bonus if so
+        Rank :=  SourceCell shr 3;
+        PromotionCell := SourceCell and $7;
+        if min(5, Distance(SourceCell, PromotionCell)) < Distance(BlackKingCell, PromotionCell) - Board.ToPlay then
+          PassedPawnBonus := PassedPawnBonus + UnstoppableBonus_eg[Rank];
+        end;
+
+      // if KingOnKeySquare
+      if Board.KingOnly(Black) then
+        if (Board.ToPlay = white) or (Distance(BlackKingCell, SourceCell) > 1) then
+          if  ((WhiteKeySqrMask[SourceCell] and Board.WhitePegs and Board.Kings) <> 0) then
+            PassedPawnBonus := PassedPawnBonus + KingEscortBonus_eg;
+
+      // king proximity
+      PassedPawnBonus := PassedPawnBonus + KingProximityBonusA_eg[Distance(SourceCell, WhiteKingCell) - Distance(SourceCell, BlackKingCell) - (1 - 2*Board.ToPlay)];
+      end                                                                                                                                // -1 for white to move, +1 if black to move                                                                                                                                         // -1 for white to m
+     else
+      begin
+      if (UInt64($1) shl (SourceCell - 8) and (Board.WhitePegs or Board.BlackPegs)) = 0 then   // square in front is unoccupied, can advance
+        begin
+        PawnAdvancePeg := UInt64($1) shl (SourceCell - 8);
+        if ((AttackedbyBlack and PawnAdvancePeg) <> 0) then                     // next square attacked by black
+          begin
+          if ((AttackedbyWhite and PawnAdvancePeg) = 0) then                    // next square not defended by white
+            PassedPawnBonus := PassedPawnBonus + PasserBlockedPenaltyB_eg       // passer can be captured on next square
+          end
+         else
+          PassedPawnBonus := PassedPawnBonus + PasserCanAdvanceBonusA_eg;       // passer can safely advance one square forward
+        end
+       else
+        PassedPawnBonus := PassedPawnBonus + PasserBlockedPenaltyA_eg;          // next square in front is blocked
+
+      // king proximity
+      PassedPawnBonus := PassedPawnBonus + KingProximityBonusB_eg[Distance(SourceCell, WhiteKingCell) - Distance(SourceCell, BlackKingCell)];                                                                                                      // -1 for white to m
+      end;
+    end;
+
+
+  SourcePegs := Board.BlackPegs and Board.Pawns and Passers;
+  while SourcePegs <> 0 do
+    begin
+    SourceCell := PopLowBit_Alt(SourcePegs);
+    if Board.PawnsOnly(White) then
+      begin
+      // if path not blocked by own piece
+      if (BlackSpanMask[SourceCell] and Board.BlackPegs) = 0 then
+        begin
+        // check if opponent king outside 'pawn square' & give bonus if so
+        Rank :=  SourceCell shr 3;
+        PromotionCell := (SourceCell and $7) + 56;
+        if min(5, Distance(SourceCell, PromotionCell)) < Distance(WhiteKingCell, PromotionCell) - (1 - Board.ToPlay) then
+          PassedPawnBonus := PassedPawnBonus - UnstoppableBonus_eg[7-Rank];
+        end;
+
+      // if KingOnKeySquare
+      if Board.KingOnly(White) then
+        if (Board.ToPlay = black) or (Distance(WhiteKingCell, SourceCell) > 1) then
+          if  ((BlackKeySqrMask[SourceCell] and Board.BlackPegs and Board.Kings) <> 0) then
+            PassedPawnBonus := PassedPawnBonus - KingEscortBonus_eg;
+
+      // king proximity bonus
+      PassedPawnBonus := PassedPawnBonus - KingProximityBonusA_eg[Distance(SourceCell, BlackKingCell) - Distance(SourceCell, WhiteKingCell) - (2*Board.ToPlay-1)];
+      end                                                                                                                                   // -1 for black to move, +1 if white to move
+     else
+      begin
+      if (UInt64($1) shl (SourceCell + 8) and (Board.WhitePegs or Board.BlackPegs)) = 0 then      // square in front is unoccupied, can advance
+        begin
+        PawnAdvancePeg := UInt64($1) shl (SourceCell + 8);
+        if ((AttackedbyWhite and PawnAdvancePeg) <> 0) then                     // next square attacked by white
+          begin
+          if ((AttackedbyBlack and PawnAdvancePeg) = 0) then                    // next square not defended by black
+            PassedPawnBonus := PassedPawnBonus - PasserBlockedPenaltyB_eg       // passer can be captured on next square
+          end
+         else
+          PassedPawnBonus := PassedPawnBonus - PasserCanAdvanceBonusA_eg;       // passer can safely advance
+        end
+       else
+        PassedPawnBonus := PassedPawnBonus - PasserBlockedPenaltyA_eg;          // square in front is blocked
+
+      // king proximity bonus
+      PassedPawnBonus := PassedPawnBonus - KingProximityBonusB_eg[Distance(SourceCell, BlackKingCell) - Distance(SourceCell, WhiteKingCell)];
+      end;
+    end;
+
 
   Tempo := (1 - 2 * Board.ToPlay) * Tempo_Bonus_mg;
   PST_mg := PST_mg + Tempo;
 
   Tempo := (1 - 2 * Board.ToPlay) * Tempo_Bonus_eg;
-  PST_eg := PST_eg + Tempo;
+  PST_eg := PST_eg + PassedPawnBonus + Tempo;
 
   PST := (PST_mg * Board.GameStage + PST_eg * (64 - Board.GameStage)) div 64;
 
@@ -1857,54 +2119,57 @@ function EvalCalc(const Board : TBoard) : integer;
 
 function ScoreFromBoard(const Board : TBoard) : integer;
   var
-    PawnEval : Int64;
-    MatHashWhite, MatHashBlack, Hash, PawnEvalHash : UInt64;
+    PawnEval : integer;
+    MatHashWhite, MatHashBlack, EndGameHash, PawnEvalHash : UInt64;
+    Passers : UInt64;
     EvalFunction : TEvalFunction;
 
   begin
   if EvalHashTable.RetrieveScore(Board.Hash, result) = false then
     begin
     PawnEval := 0;
+    Passers := 0;
 
     if Board.Pawns <> 0 then
       begin
       PawnEvalHash := Board.PawnHash xor (UInt64(Board.GameStage) * $5369DEB);
-      if PawnHashTable.RetrieveScore(PawnEvalHash, PawnEval) = false then
+      if PawnHashTable.RetrieveData(PawnEvalHash, PawnEval, Passers) = false then
         begin
-        PawnEval := PawnBonus(Board);
-        PawnHashTable.StoreScore(PawnEvalHash, PawnEval)
+        PawnEval := PawnBonus(Board, Passers);
+        PawnHashTable.StoreData(PawnEvalHash, PawnEval, Passers);
         end;
       end;
 
-    result := EvalCalc(Board) + PawnEval;
-
-    if Board.ToPlay = Black then
-      result := -result;
+    result := EvalCalc(Board, Passers) + PawnEval;
 
     if bitcount(Board.WhitePegs or Board.BlackPegs) <= 5 then
       begin
       MatHashWhite := WhiteMaterialHashFromBoard(Board);
       MatHashBlack := BlackMaterialHashFromBoard(Board);
 
-      Hash := MatHashWhite xor MatHashBlack;
+      EndGameHash := MatHashWhite xor MatHashBlack;
 
-      EvalFunction := EndGameTable.RetrieveEval(Hash);
+      EvalFunction := EndGameTable.RetrieveEval(EndGameHash);
       if assigned(EvalFunction) then
         result := EvalFunction(Board, result);
       end;
 
     EvalHashTable.StoreScore(Board.Hash, result);
     end;
+
+  if Board.ToPlay = Black then
+    result := -result;
   end;
 
 
-function RemainingMoveCountEstimate(var Board : TBoard) : integer;
+function RemainingMoveCountEstimate(const Board : TBoard) : integer;
 // source: 'Time Management Procedure in Computer Chess', Vladan Vuckovic & Rade Solak
 
   var
     Stage : integer;
 
   begin
+
   stage := min(80, Board.GameStage + BitCount(Board.Pawns));
 
   if stage < 20 then
@@ -1915,10 +2180,11 @@ function RemainingMoveCountEstimate(var Board : TBoard) : integer;
     result := (5 * stage) div 4 - 10;    // my adjustment added + 20
 
   result := result div 2;
+
   end;
 
 
-function RemainingMoveCountEstimate_Alt(var Board : TBoard; MoveNumber : UInt64) : integer;
+function RemainingMoveCountEstimate_Alt(const Board : TBoard; MoveNumber : UInt64) : integer;
   var
     calc : double;
 
@@ -1964,8 +2230,8 @@ function Q_Eval(alpha, beta: Integer; var Board : TBoard; PrevMove : TMove): int
 
   if movecount > 1 then
     begin
-    RateMovesQ(movecount, Moves);
-    SortMoves(movecount, Moves);
+    RateMovesQ(Moves);
+    SortMoves(Moves);
     end;
 
   // Search
@@ -1974,7 +2240,9 @@ function Q_Eval(alpha, beta: Integer; var Board : TBoard; PrevMove : TMove): int
     begin
 
     Board.MakeMove(Moves[k]);
+
     value := -Q_Eval(-beta, -alpha, Board, Moves[k]);
+
     Board.UndoMove(Moves[k]);
 
     if value >= beta then
@@ -1985,72 +2253,6 @@ function Q_Eval(alpha, beta: Integer; var Board : TBoard; PrevMove : TMove): int
     end;
 
   result := alpha;
-  end;
-
-
-
-function UInt64ToDouble(value : UInt64) : double;
-  begin
-  result := value;
-  end;
-
-
-// time strategy #1 : Polynomial model of remaining moves
-
-function AllocateTimeForMove(TimeRemaining, MoveNumber : UInt64) : UInt64;
-  var
-    RemainingMoves : double;
-
-  begin
-    if MoveNumber < 200 then
-    RemainingMoves := ((((((-2.617136000E-09 * MoveNumber) + 1.517155086E-06) * MoveNumber -3.293926387E-04) * MoveNumber) + 3.228622557E-02) * MoveNumber - 1.4085982) * MoveNumber + 51.726835
-   else
-    RemainingMoves := 16;
-
-  result := round(UInt64ToDouble(TimeRemaining) / RemainingMoves);
-  end;
-
-
-// time strategy #2 : 70% time for first 40 moves, 30% for balance
-
-function AllocateTimeForMove_2(TimeRemaining, MoveNumber : UInt64) : UInt64;
-  var
-    RemainingMoves : double;
-
-  begin
-    if MoveNumber <= 40 then
-    RemainingMoves := 58 - MoveNumber
-   else
-    RemainingMoves := 18;
-
-  result := round(UInt64ToDouble(TimeRemaining) / RemainingMoves);
-  end;
-
-
-// time strategy #2A : 70% time for first 40 moves, 30% for balance
-// adjust for Q_Eval of position
-
-function AllocateTimeForMove_2A(TimeRemaining, Increment, MoveNumber : UInt64; Board : TBoard) : UInt64;
-  var
-    RemainingMoves, QScore : Integer;
-
-  begin
-  if MoveNumber < 40 then
-    RemainingMoves := 58 - MoveNumber
-   else
-    RemainingMoves := 18;
-
-  if  MoveNumber > 40 then
-    begin
-    QScore := abs(-Q_Eval(ScoreMinValue, ScoreMaxValue,  Board, 0));
-
-    if QScore < 150 then
-      RemainingMoves := RemainingMoves + 5
-     else if QScore > 350 then
-      RemainingMoves := RemainingMoves - 5;
-    end;
-
-  result := (TimeRemaining + (RemainingMoves - 5) * Increment) div RemainingMoves;
   end;
 
 
