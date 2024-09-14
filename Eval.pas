@@ -260,6 +260,35 @@ const
       $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000);
 
 
+    WhiteBlockedRook_QS_RookMask = $0301000000000000;
+    WhiteBlockedRook_QS_KingMask = $0600000000000000;
+
+    WhiteBlockedRook_KS_RookMask = $C080000000000000;
+    WhiteBlockedRook_KS_KingMask = $6000000000000000;
+
+    BlackBlockedRook_QS_RookMask = $0000000000000103;
+    BlackBlockedRook_QS_KingMask = $0000000000000006;
+
+    BlackBlockedRook_KS_RookMask = $C0800000000080C0;
+    BlackBlockedRook_KS_KingMask = $0000000000000060;
+
+
+    WhiteBlockedBishop_QS_BishopMask = $0400000000000000;
+    WhiteBlockedBishop_QS_PawnMask   = $0008000000000000;
+    WhiteBlockedBishop_QS_EmptyMask  = $0000080000000000;
+
+    WhiteBlockedBishop_KS_BishopMask = $2000000000000000;
+    WhiteBlockedBishop_KS_PawnMask   = $0010000000000000;
+    WhiteBlockedBishop_KS_EmptyMask  = $0000100000000000;
+
+    BlackBlockedBishop_QS_BishopMask = $0000000000000004;
+    BlackBlockedBishop_QS_PawnMask   = $0000000000000800;
+    BlackBlockedBishop_QS_EmptyMask  = $0000000000080000;
+
+    BlackBlockedBishop_KS_BishopMask = $0000000000000020;
+    BlackBlockedBishop_KS_PawnMask   = $0000000000001000;
+    BlackBlockedBishop_KS_EmptyMask  = $0000000000100000;
+
 
     KingPrecinctIndex : array[0..63] of integer =
 
@@ -551,7 +580,6 @@ const
    (   0,   1,   1, -11, -15,   0,   0,   0,   0));
 
 
-
   DefendedByBonus : array[pawn..queen] of integer =
     (   4,  3,  6,  7,  6);                                 // rook & queen values are used in mg, eg values = 0
 
@@ -576,8 +604,10 @@ const
   RookOnOpenFile_Bonus_eg = 1;
   RookOnSemiOpenFile_Bonus_mg = 12;
   RookOnSemiOpenFile_Bonus_eg = 33;
+  BlockedRook_Penalty_mg = -32;
   BishopPawn_Penalty = -8;
   BishopCentreControl_Bonus = 7;
+  BlockedBishop_Penalty_mg = -67;
   KingKnightDist_Penalty = -7;
   KingBishopDist_Penalty = -4;
 
@@ -1237,7 +1267,7 @@ function EvalCalc(const Board : TBoard; Passers : UInt64) : integer;
     index, PST, PST_mg, PST_eg, MatBal, AttackBonus, piececount, PieceBonus, Tempo, KingAttack, DefenderBonus, PassedPawnBonus : integer;
     dQ, dR, dB, dN, Pdif, Ndif, Bdif, Rdif, Qdif : integer;
     WhiteKingThreat, BlackKingThreat, WhiteKingKnightThreat, BlackKingKnightThreat, WhiteKingRookThreat, BlackKingRookThreat, WhiteKingBishopThreat, BlackKingBishopThreat : UInt64;
-    TempMoves, AdvanceMove, AttackedbyWhite, AttackedbyBlack, PawnAdvancePeg : UInt64;
+    TempMoves, AdvanceMove, AttackedbyWhite, AttackedbyBlack, PawnAdvancePeg, AllPegs : UInt64;
 
    // Observation : Eval is never required to evaluate a position that is in check - as it is called only on quiet positions
 
@@ -1255,6 +1285,8 @@ function EvalCalc(const Board : TBoard; Passers : UInt64) : integer;
 
   AttackedbyWhite := 0;
   AttackedbyBlack := 0;
+
+  AllPegs := Board.WhitePegs or Board.BlackPegs;
 
   BlackKingCell := GetLowBit_Alt(Board.Kings and Board.BlackPegs);
   WhiteKingCell := GetLowBit_Alt(Board.Kings and Board.WhitePegs);

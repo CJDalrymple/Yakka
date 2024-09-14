@@ -632,6 +632,7 @@ function TBoard.GetPiece(CellIndex : integer) : integer;
 
 function TBoard.GetPiece_asm(CellIndex : integer) : integer;
   asm
+  .ALIGN 16
   xor rax, rax
   mov r9, $1
   shlx r8, r9, rdx
@@ -1099,8 +1100,7 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
       ClearBit(QuietMoves, DestCell);
       end;
 
-    if DiscoveredCheckPegs and (UInt64($1) shl sourceCell) = 0 then
-      QuietMoves := PawnAttack(OpponentKingCell) and QuietMoves;
+    QuietMoves := PawnAttack(OpponentKingCell) and QuietMoves;
 
     while QuietMoves <> 0 do
       begin
@@ -3039,6 +3039,8 @@ function TBoard.RookAttack(Cell : integer): UInt64;
 
 function TBoard.RookAttack_asm(Cell : integer): UInt64;
   asm
+  .ALIGN 16
+
   mov r8, Self.WhitePegs                      //  r8 =>     AllPegs := WhitePegs or BlackPegs;
   or r8, Self.BlackPegs
 
@@ -3118,6 +3120,7 @@ function TBoard.BishopAttack(Cell : integer): UInt64;
 
 function TBoard.BishopAttack_asm(Cell : integer): UInt64;
   asm
+  .ALIGN 16
   mov r8, Self.WhitePegs                      //  r8 =>     AllPegs := WhitePegs or BlackPegs;
   or r8, Self.BlackPegs
 

@@ -46,11 +46,9 @@ uses
 
 const
   CurrentName = 'Yakka';
-  CurrentVersion = 'v1.0r';
-  VersionDate =   '3 Sept 2024';
+  CurrentVersion = 'v1.1';
+  VersionDate =   '14 Sept 2024';
   Author = 'Christopher Crone';
-
-  // test > position fen 2r2rk1/1ppq2b1/1n6/1N1Ppp2/p7/Pn2BP2/1PQ1BP2/3RK2R w K - 0 23
 
 var
   Board : TBoard;
@@ -193,6 +191,10 @@ procedure ExecuteProgram;
 
                             else if Lexer.FTokenKind = tok_startpos then
                              SetUpPositionFromStart(Board, GameMoveList)
+
+                            else if Lexer.FTokenKind = tok_testpos then
+                             SetUpTestPosition(Board, GameMoveList)
+
                             else
                              Writeln(AnsiString('Unknown Command'));
 
@@ -217,7 +219,7 @@ procedure ExecuteProgram;
 
                           PVS_Search.DepthLimit := IntegerNumber;
                           PVS_Search.TimeLimit := TimeLimit_Max;
-                          PVS_Search.HardTimeLimit := TimeLimit_Max;
+                          PVS_Search.SoftTimeLimit := false;
                           PVS_Search.NodeLimit := NodeLimit_Max;
 
                           PVS_Search.StartInBackGround(Board, GameMoveList);
@@ -238,7 +240,7 @@ procedure ExecuteProgram;
 
                           PVS_Search.DepthLimit := MaxSearchPly;
                           PVS_Search.TimeLimit := TimeLimit_Max;
-                          PVS_Search.HardTimeLimit := TimeLimit_Max;
+                          PVS_Search.SoftTimeLimit := false;
                           PVS_Search.NodeLimit := IntegerNumber;
 
                           PVS_Search.StartInBackGround(Board, GameMoveList);
@@ -262,7 +264,7 @@ procedure ExecuteProgram;
 
                           PVS_Search.DepthLimit := MaxSearchPly;
                           PVS_Search.TimeLimit := IntegerNumber;
-                          PVS_Search.HardTimeLimit := IntegerNumber;
+                          PVS_Search.SoftTimeLimit := false;
                           PVS_Search.NodeLimit := NodeLimit_Max;
 
                           PVS_Search.StartInBackGround(Board, GameMoveList);
@@ -279,7 +281,7 @@ procedure ExecuteProgram;
 
                         PVS_Search.DepthLimit := MaxSearchPly;
                         PVS_Search.TimeLimit := TimeLimit_Max;
-                        PVS_Search.HardTimeLimit := TimeLimit_Max;
+                        PVS_Search.SoftTimeLimit := false;
                         PVS_Search.NodeLimit := NodeLimit_Max;
 
                         PVS_Search.StartInBackGround(Board, GameMoveList);
@@ -321,13 +323,15 @@ procedure ExecuteProgram;
 
                         if Board.ToPlay = White then
                           begin
-                          PVS_Search.TimeLimit := AllocateTimeForSearch_Alt(MovesToGo, TimeRemaining_White, TimeIncrementPerMove_White, Board.TurnNumber);
-                          PVS_Search.HardTimeLimit := TimeRemaining_White;
+                          PVS_Search.TimeLimit := TimeRemaining_White;
+                          PVS_Search.SoftTimeLimit := true;
+                          PVS_Search.BudgetTime := AllocateTimeForSearch(MovesToGo, TimeRemaining_White, TimeIncrementPerMove_White, Board.TurnNumber);
                           end
                          else
                           begin
-                          PVS_Search.TimeLimit := AllocateTimeForSearch_Alt(MovesToGo, TimeRemaining_Black, TimeIncrementPerMove_Black, Board.TurnNumber);
-                          PVS_Search.HardTimeLimit := TimeRemaining_Black;
+                          PVS_Search.TimeLimit := TimeRemaining_Black;
+                          PVS_Search.SoftTimeLimit := true;
+                          PVS_Search.BudgetTime := AllocateTimeForSearch(MovesToGo, TimeRemaining_Black, TimeIncrementPerMove_Black, Board.TurnNumber);
                           end;
 
                         PVS_Search.NodeLimit := NodeLimit_Max;

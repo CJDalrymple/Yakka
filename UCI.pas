@@ -43,6 +43,7 @@ interface
                      tok_startpos,
                      tok_moves,
                      tok_move,
+                     tok_testpos,
 
                    tok_stop,
                    tok_ponderhit,
@@ -117,6 +118,7 @@ procedure New_Game(var Board : TBoard; var GameMoveList : TGameMoveList; var PVS
 
 procedure SetupPositionFromFen(var Board : TBoard; var GameMoveList : TGameMoveList; var S : PAnsiChar);
 procedure SetupPositionFromStart(var Board : TBoard; var GameMoveList : TGameMoveList);
+procedure SetupTestPosition(var Board : TBoard; var GameMoveList : TGameMoveList);
 function MakeMoves(var Board : TBoard; var GameMoveList : TGameMoveList; S : PAnsiChar) : boolean;
 
 procedure DrawBoard(Board : TBoard);
@@ -211,6 +213,13 @@ procedure TLexer.GetNextToken;
     begin
     FTokenKind := tok_stop;
     FToken := 'stop';
+    exit;
+    end;
+
+  if Str = 'testpos' then
+    begin
+    FTokenKind := tok_testpos;
+    FToken := 'test';
     exit;
     end;
 
@@ -576,6 +585,17 @@ procedure SetupPositionFromFen(var Board : TBoard; var GameMoveList : TGameMoveL
 procedure SetupPositionFromStart(var Board : TBoard; var GameMoveList : TGameMoveList);
   begin
   Board.Reset;
+  GameMoveList.Clear;
+  end;
+
+
+procedure SetupTestPosition(var Board : TBoard; var GameMoveList : TGameMoveList);
+
+// test > position fen 2r2rk1/1ppq2b1/1n6/1N1Ppp2/p7/Pn2BP2/1PQ1BP2/3RK2R w K - 0 23
+
+  begin
+  Board.Reset;
+  BoardFromFEN('2r2rk1/1ppq2b1/1n6/1N1Ppp2/p7/Pn2BP2/1PQ1BP2/3RK2R w K - 0 23', Board);
   GameMoveList.Clear;
   end;
 

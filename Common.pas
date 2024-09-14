@@ -188,6 +188,8 @@ procedure TPRNG.Seed(x1, x2 : UInt64);
 
 procedure Flipbit(var x : UInt64; Index : UInt64);
   asm
+  .ALIGN 16
+
   MOV rax, [rcx]
   BTC rax, rdx
   MOV [rcx], rax
@@ -198,6 +200,8 @@ procedure Flipbit(var x : UInt64; Index : UInt64);
 
 procedure ClearBit(var x : UInt64; Index : UInt64);
   asm
+  .ALIGN 16
+
   MOV rax, [rcx]
   BTR rax, rdx
   MOV [rcx], rax
@@ -208,6 +212,8 @@ procedure ClearBit(var x : UInt64; Index : UInt64);
 
 procedure SetBit(var x : UInt64; Index : UInt64);
   asm
+  .ALIGN 16
+
   MOV rax, [rcx]
   BTS rax, rdx
   MOV [rcx], rax
@@ -218,6 +224,8 @@ procedure SetBit(var x : UInt64; Index : UInt64);
 
 function GetBit(const x : UInt64; Index : UInt64) : boolean;
   asm
+  .ALIGN 16
+
   BT rcx, rdx
   SETC al
   end;
@@ -225,6 +233,8 @@ function GetBit(const x : UInt64; Index : UInt64) : boolean;
 
 procedure SetAllBits(var x : UInt64);
   asm
+  .ALIGN 16
+
   MOV [rcx], -1
   end;
 
@@ -234,6 +244,8 @@ function GetLowBit_Alt(const x : UInt64) : Int64;
   // at least one bit must be set
 
   asm
+  .ALIGN 16
+
   BSF rax, rcx
   end;
 
@@ -243,6 +255,8 @@ function GetHighBit_Alt(const x : UInt64) : Int64;
   // at least one bit must be set
 
   asm
+  .ALIGN 16
+
   BSR rax, rcx
   end;
 
@@ -252,6 +266,8 @@ function PopLowBit_Alt(var x : UInt64) : Int64;
   // at least one bit must be set
 
   asm
+  .ALIGN 16
+
   BLSI rdx, [rcx]
   XOR [rcx], rdx          // clears bit in x
   BSF rax, rdx            // gets index of lowest bit
@@ -260,24 +276,32 @@ function PopLowBit_Alt(var x : UInt64) : Int64;
 
 function BitCount(const x : UInt64) : Int64;
   asm
+  .ALIGN 16
+
   POPCNT  rax, rcx
   end;
 
 
 function PEXT(const source, mask : UInt64) : UInt64;
   asm
+  .ALIGN 16
+
   PEXT rax, rcx, rdx
   end;
 
 
 function PDEP(const source, Mask : UInt64) : UInt64;
   asm
+  .ALIGN 16
+
   PDEP rax, rcx, rdx
   end;
 
 
 function Flip(Pegs : UInt64) : UInt64;
   asm
+  .ALIGN 16
+
   BSWAP rcx
   MOV rax, rcx
   end;
