@@ -1,6 +1,6 @@
 # Yakka
 
-**Yakka** is a Chess Engine writen in object pascal (Delphi) that implements the Universal Chess Interface (UCI) protocol.
+**Yakka** is a Chess Engine written in object pascal (Delphi) that implements the Universal Chess Interface (UCI) protocol.
 
 ## Target Platform
 
@@ -19,14 +19,14 @@ Alternatively Yakka can be run as a command line console using UCI commands.
 
 ## Implemented Engine Options (UCI)
 
-  - option name Threads type spin default 4 min 1 max 16
+  - option name Threads type spin default 1 min 1 max 16
   - option name Hash type spin default 64 min 1 max 256
   - option name Clear Hash type button
-  - option name OwnBook type check default true 
+  - option name OwnBook type check default false 
 
 ## Download
 
-You can download the precompiled Windows executable : 'Yakka v1.0 x64.exe'
+You can download the precompiled Windows executable : 'Yakka v1.1 x64.exe'
 This will run on x86-64 CPU's which support the BMI2 instruction set.  
 
 ## Compilation
@@ -59,6 +59,7 @@ To build the engine from source, use Delphi 12.0 Alexandra or later version.
   - Iterative deepening
   - Quiescence Search (QS)
   - Transposition table (two buckets with aging)
+  - Singular Extensions
 
 * Selectivity
  
@@ -68,6 +69,7 @@ To build the engine from source, use Delphi 12.0 Alexandra or later version.
   - Enhanced Transposition Cut-off (ETC)
   - Internal Iterative Deepening (IID)
   - Late Move Reduction (LMR)
+  - Late Move Pruning 
  
 * Move Ordering
 
@@ -80,7 +82,7 @@ To build the engine from source, use Delphi 12.0 Alexandra or later version.
 
 * Evaluation
 
-  - Hand Crafted Evaluation with approx 2540 weights (v1.0)
+  - Hand Crafted Evaluation with approx. 2540 weights (v1.1)
   - Texel tuned parameters
   - Tapered Evaluation (mg, eg)
   - Material table
@@ -95,16 +97,17 @@ To build the engine from source, use Delphi 12.0 Alexandra or later version.
 * Opening Book
 
   - Own internal format
-  - Total Book Positions = 8507 (v1.0)
-  - Total Book Moves = 12184 (v1.0)  
+  - Total Book Positions = 8507 (v1.1)
+  - Total Book Moves = 12184 (v1.1)  
 
 ## Version History
 
 * Yakka v1.0 - 10th April 2024 Initial Release
+* Yakka v1.1 - 15th September 2024 Bug Fixes and Improved Playing Strength
 
 ## Help & Support
 
-Tested on desktop with Intel Core i9-9900K CPU @ 3.60GHz, Windows 11 x64, using 'Arena' GUI
+Tested on desktop with Intel Core i9-9900K CPU @ 3.60GHz, Windows 11 x64, using 'Cutechess-cli' 
 Please let me know of any bugs, compilation-problems or stability issues.
 Any ideas, comments or suggestions for improvement are always welcome.
 
@@ -112,13 +115,12 @@ Any ideas, comments or suggestions for improvement are always welcome.
   
 This project is licenced under the MIT Licence
 
-## Future Endevours (TODO)
+## Future Endeavours (TODO)
 
 In no particular order:
   - Much experimenting / tweaking
   - MultiPV
   - Pondering   
-  - Singular Extensions
   - Endgame Tablebases
   - NNUE
 
