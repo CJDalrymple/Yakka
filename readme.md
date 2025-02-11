@@ -7,7 +7,7 @@
   - Windows 11 x64 Platform
   - Command-line, Console Application
   - Written in Delphi Object Pascal
-  - Will run on x86-64 CPU's which support BMI2 instruction set
+  - Will run on x86-64 CPU's which support BMI2 and AVX2 instruction set
 
 ## How To Use
 
@@ -26,8 +26,8 @@ Alternatively Yakka can be run as a command line console using UCI commands.
 
 ## Download
 
-You can download the precompiled Windows executable : 'Yakka v1.1 x64.exe'
-This will run on x86-64 CPU's which support the BMI2 instruction set.  
+You can download the precompiled Windows executable : 'Yakka v1.2 x64.exe'
+This will run on x86-64 CPU's which support the BMI2 and AVX2 instruction sets.  
 
 ## Compilation
 
@@ -39,7 +39,11 @@ To build the engine from source, use Delphi 12.0 Alexandra or later version.
       File Name : 'Opening_Book_00.txt'
       Type : RCDATA
       Identifier : Open_Book 
-  - Build 'Yakka1'
+
+      File Name : 'NNUE 1536x64 rev 50.net'
+      Type : RCDATA
+      Identifier : _1536x64_v1
+  - Build 'Yakka'
 
 ## Functional Details
 
@@ -59,7 +63,7 @@ To build the engine from source, use Delphi 12.0 Alexandra or later version.
   - Iterative deepening
   - Quiescence Search (QS)
   - Transposition table (two buckets with aging)
-  - Singular Extensions
+  - Singular Extension
 
 * Selectivity
  
@@ -82,17 +86,8 @@ To build the engine from source, use Delphi 12.0 Alexandra or later version.
 
 * Evaluation
 
-  - Hand Crafted Evaluation with approx. 2540 weights (v1.1)
-  - Texel tuned parameters
-  - Tapered Evaluation (mg, eg)
-  - Material table
-  - Piece Square Tables (PST)
-  - Mobility
-  - King Safety
-  - Material Imbalance
-  - Attack / Defense Piece Bonus 
-  - Pawn Structure 
-  - Hash Tables (Evaluation, Pawn Structure)
+  - NNUE net 768x2>64>1 (requires AVX2)
+
 
 * Opening Book
 
@@ -104,6 +99,7 @@ To build the engine from source, use Delphi 12.0 Alexandra or later version.
 
 * Yakka v1.0 - 10th April 2024 Initial Release
 * Yakka v1.1 - 15th September 2024 Bug Fixes and Improved Playing Strength
+* Yakka v1.2 -  8th February 2025 Changed evaluation from HCE to NNUE 
 
 ## Help & Support
 
@@ -122,7 +118,7 @@ In no particular order:
   - MultiPV
   - Pondering   
   - Endgame Tablebases
-  - NNUE
+
 
 
 

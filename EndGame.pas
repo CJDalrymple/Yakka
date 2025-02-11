@@ -1,7 +1,7 @@
 //  The MIT License (MIT)
 
 //  Chess Engine Yakka
-//  Copyright (c) 2024 Christopher Crone
+//  Copyright (c) 2025 Christopher Crone
 
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal
@@ -30,60 +30,51 @@ uses
   System.Math, Winapi.Windows, GameDef, Common, System.Classes;
 
 const
-  MaterialHash : array[white..black, 0..29] of UInt64 =
 
-  (($38F4CE22B412B425, $F594DB19D0B7C845, $A56F9F4CB8CB3FAB, $032A0BD7A806E72C, $4ACB4E1BE879E207, $21AF65E947D4F69F, $9AC14B0FBFBC5609, $A80259739D092042, $F1AA3172AC31FB6F,   // white pawn 0..8
-    $6DCBBBA917A57843, $2AC80EDF8B9C2471, $7797D297A84147FE, $3709009FFB55342B,      // white knight     0, 1, 2, >2
-    $7A38C076953B97E6, $C42062C86032D767, $14558239DECB0F4D, $652EDF916C4BE504,      // white bishop(w)  0, 1, 2, >2
-    $E161CAAE4F177394, $AB985BD53993CB91, $94985E477AB8C825, $5499EE29285CE543,      // white bishop(b)  0, 1, 2, >2
-    $0F43FE5038EAD367, $5510B9D904A371B2, $BAD83E3E71C380CE, $ACDEB7D186B4851F,      // white rook       0, 1, 2, >2
-    $8A01CE3A2C9A7A61, $10A2861D684519B1, $3FE167DB101E0EDD, $137A5FE7A93F4649,      // white queen      0, 1, 2, >2
-    $1B7DD93B5EE030A8),                                                              // white king       1
+  WhiteKeySqrMask : array[0..63] of UInt64 =
+   ($0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000,
+    $0000000000000000, $0000000000000507, $0000000000000A0E, $000000000000141C, $0000000000002838, $0000000000005070, $000000000000A0E0, $0000000000000000,
+    $0000000000000000, $0000000000000707, $0000000000000E0E, $0000000000001C1C, $0000000000003838, $0000000000007070, $000000000000E0E0, $0000000000000000,
+    $0000000000000202, $0000000000070700, $00000000000E0E00, $00000000001C1C00, $0000000000383800, $0000000000707000, $0000000000E0E000, $0000000000004040,
+    $0000000000000202, $0000000000070000, $00000000000E0000, $00000000001C0000, $0000000000380000, $0000000000700000, $0000000000E00000, $0000000000004040,
+    $0000000000000202, $0000000007000000, $000000000E000000, $000000001C000000, $0000000038000000, $0000000070000000, $00000000E0000000, $0000000000004040,
+    $0000000000000202, $0000000700000000, $0000000E00000000, $0000001C00000000, $0000003800000000, $0000007000000000, $000000E000000000, $0000000000004040,
+    $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000);
 
-   ($B72CB9A01EC4EE88, $4D5398BA37ED58E3, $9CF7785716E94402, $AC9731B8AF0E3066, $80FDD21DC621AA1F, $C7C3B13CEB19663D, $65057F886B8BC518, $5765795CBA9F9BF2, $C8DD294CCA56E8FE,   // black pawn 0..8
-    $BAADACC2EF1A84F8, $76070BCE1CC86256, $81E83EDB8CD483B9, $A73236E5DE9A10CA,      // black knight     0, 1, 2, >2
-    $570330EF9C3B6CBE, $030181F0831F92A8, $E64921367CDCFA69, $52BA8419A1D75502,      // black bishop(w)  0, 1, 2, >2
-    $221D070A21A59A5A, $5AD7A2DFBEA88C5D, $3E2002294879A896, $A52BCB76AD7E053C,      // black bishop(b)  0, 1, 2, >2
-    $CAA18F7957DF1524, $420CD65B8D8BE7CA, $88B6450D4DF2A40C, $B788A3FE9E84BFAA,      // black rook       0, 1, 2, >2
-    $75CC2C3D68AFC23C, $BDCB012CE31AB73B, $786F9A2754978132, $9BD988B855C923B1,      // black queen      0, 1, 2, >2
-    $DACBB869272A058E));                                                             // black king       1
+  BlackKeySqrMask : array[0..63] of UInt64 =
+   ($0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000,
+    $0202000000000000, $0000000007000000, $000000000E000000, $000000001C000000, $0000000038000000, $0000000070000000, $00000000E0000000, $4040000000000000,
+    $0202000000000000, $0000000700000000, $0000000E00000000, $0000001C00000000, $0000003800000000, $0000007000000000, $000000E000000000, $4040000000000000,
+    $0202000000000000, $0000070000000000, $00000E0000000000, $00001C0000000000, $0000380000000000, $0000700000000000, $0000E00000000000, $4040000000000000,
+    $0202000000000000, $0007070000000000, $000E0E0000000000, $001C1C0000000000, $0038380000000000, $0070700000000000, $00E0E00000000000, $4040000000000000,
+    $0000000000000000, $0707000000000000, $0E0E000000000000, $1C1C000000000000, $3838000000000000, $7070000000000000, $E0E0000000000000, $0000000000000000,
+    $0000000000000000, $0705000000000000, $0E0A000000000000, $1C14000000000000, $3828000000000000, $7050000000000000, $E0A0000000000000, $0000000000000000,
+    $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000, $0000000000000000);
+
+
+  FlipLookup : array[0..63] of integer =
+      (56, 57, 58, 59, 60, 61, 62, 63,
+       48, 49, 50, 51, 52, 53, 54, 55,
+       40, 41, 42, 43, 44, 45, 46, 47,
+       32, 33, 34, 35, 36, 37, 38, 39,
+       24, 25, 26, 27, 28, 29, 30, 31,
+       16, 17, 18, 19, 20, 21, 22, 23,
+        8,  9, 10, 11, 12, 13, 14, 15,
+        0,  1,  2,  3,  4,  5,  6,  7);
+
 
 type
   TEvalFunction = function(const Board : TBoard; Eval : integer) : integer;
 
-type
-  TEndGameRec = record
-    ID : UInt64;
-    EvalFunction : TEvalFunction;
-  end;
-
-type
-  T_EndGame_Table = record
-    const
-      TableSize = $1000;             // 2^12       = 4096
-      TableMask = TableSize - 1 ;    // 2^12 - 1
-      MaxLink = 4;
-
-    var
-      Table : Array[0..TableSize-1] of TEndGameRec;
-
-    class operator Initialize (out Dest: T_EndGame_Table);
-
-    procedure AddCase(MaterialHash : UInt64; EvalFunction : TEvalFunction);
-    function RetrieveEval(MaterialHash : UInt64) : TEvalFunction;
-    end;
-
-function MaterialHashFromBoard(const Board : TBoard) : UInt64;
-function WhiteMaterialHashFromBoard(const Board : TBoard) : UInt64;
-function BlackMaterialHashFromBoard(const Board : TBoard) : UInt64;
+function IndexFromBoard(const Board : TBoard) : UInt64;
 
 var
-  EndGameTable : T_Endgame_Table;
+  EndGameLookup : Array[0..1330] of TEvalFunction;
 
 implementation
 
 uses
-  Search, Eval;
+  Search;
 
 function Distance(Cell1, Cell2 : integer) : integer;
   begin
@@ -137,130 +128,42 @@ function KingRange(Cell : integer; Mask : UInt64) : UInt64;
   end;
 
 
-function WhiteMaterialHashFromBoard(const Board : TBoard) : UInt64;
-  var
-    index : integer;
-    pegs : UInt64;
+function KingOnKeySquare(const Board : TBoard; Player, Cell : integer) : boolean;
 
   begin
-  result := MaterialHash[White, 29];
-
-  Pegs := Board.WhitePegs and Board.Pawns;
-  index := BitCount(pegs);
-  Result := Result xor MaterialHash[White, index];
-
-  Pegs := Board.WhitePegs and Board.Knights;
-  index := 9 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[White, index];
-
-  Pegs := Board.WhitePegs and Board.Bishops and whitesqr;
-  index := 13 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[White, index];
-
-  Pegs := Board.WhitePegs and Board.Bishops and blacksqr;
-  index := 17 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[White, index];
-
-  Pegs := Board.WhitePegs and Board.Rooks;
-  index := 21 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[White, index];
-
-  Pegs := Board.WhitePegs and Board.Queens;
-  index := 25 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[White, index];
+  if Player = white then
+    result := ((WhiteKeySqrMask[Cell] and Board.WhitePegs and Board.Kings) <> 0)
+   else
+    result := ((BlackKeySqrMask[Cell] and Board.BlackPegs and Board.Kings) <> 0);
   end;
 
 
-function BlackMaterialHashFromBoard(const Board : TBoard) : UInt64;
+function IndexFromBoard(const Board : TBoard) : UInt64;
   var
-    index : integer;
+    index, cell, piece : integer;
     pegs : UInt64;
 
   begin
-  result := MaterialHash[Black, 29];
+  result := 0;
+  Pegs := Board.WhitePegs and not(Board.Kings);
+  while pegs <> 0 do
+    begin
+    result := result * 11;
+    Cell := PopLowBit_Alt(Pegs);
+    Piece := Board.GetPiece_asm(Cell);
 
-  Pegs := Board.BlackPegs and Board.Pawns;
-  index := BitCount(pegs);
-  Result := Result xor MaterialHash[Black, index];
+    result := result + piece;
+    end;
 
-  Pegs := Board.BlackPegs and Board.Knights;
-  index := 9 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[Black, index];
+  Pegs := Board.BlackPegs and not(Board.Kings);
+  while pegs <> 0 do
+    begin
+    result := result * 11;
+    Cell := PopLowBit_Alt(Pegs);
+    Piece := Board.GetPiece_asm(Cell);
 
-  Pegs := Board.BlackPegs and Board.Bishops and whitesqr;
-  index := 13 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[Black, index];
-
-  Pegs := Board.BlackPegs and Board.Bishops and blacksqr;
-  index := 17 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[Black, index];
-
-  Pegs := Board.BlackPegs and Board.Rooks;
-  index := 21 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[Black, index];
-
-  Pegs := Board.BlackPegs and Board.Queens;
-  index := 25 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[Black, index];
-  end;
-
-
-function MaterialHashFromBoard(const Board : TBoard) : UInt64;
-  var
-    index : integer;
-    pegs : UInt64;
-
-  begin
-  result := MaterialHash[White, 29] xor MaterialHash[Black, 29];
-
-  Pegs := Board.WhitePegs and Board.Pawns;
-  index := BitCount(pegs);
-  Result := Result xor MaterialHash[White, index];
-
-  Pegs := Board.WhitePegs and Board.Knights;
-  index := 9 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[White, index];
-
-  Pegs := Board.WhitePegs and Board.Bishops and whitesqr;
-  index := 13 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[White, index];
-
-  Pegs := Board.WhitePegs and Board.Bishops and blacksqr;
-  index := 17 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[White, index];
-
-  Pegs := Board.WhitePegs and Board.Rooks;
-  index := 21 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[White, index];
-
-  Pegs := Board.WhitePegs and Board.Queens;
-  index := 25 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[White, index];
-
-
-  Pegs := Board.BlackPegs and Board.Pawns;
-  index := BitCount(pegs);
-  Result := Result xor MaterialHash[Black, index];
-
-  Pegs := Board.BlackPegs and Board.Knights;
-  index := 9 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[Black, index];
-
-  Pegs := Board.BlackPegs and Board.Bishops and whitesqr;
-  index := 13 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[Black, index];
-
-  Pegs := Board.BlackPegs and Board.Bishops and blacksqr;
-  index := 17 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[Black, index];
-
-  Pegs := Board.BlackPegs and Board.Rooks;
-  index := 21 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[Black, index];
-
-  Pegs := Board.BlackPegs and Board.Queens;
-  index := 25 + min(BitCount(pegs), 3);
-  Result := Result xor MaterialHash[Black, index];
+    result := result + piece + 5;
+    end;
   end;
 
 
@@ -426,9 +329,9 @@ function Evaluate_BN(const Board : TBoard; Eval : integer) : integer;
   penalty := penalty + min(bitcount(kingPrison), 18);
 
   if (Board.Bishops and Board.BlackPegs) <> 0 then
-    result := -Material_Table[4, 0] - 165 + penalty   // black is winning, so white is down on material and larger penalty is better for white
+    result := -Eval + penalty   // black is winning, so white is down on material and larger penalty is better for white
    else
-    result := Material_Table[4, 0] + 165 - penalty;   // white is winning, so white is up material and smaller penalty is better for white
+    result := Eval - penalty;   // white is winning, so white is up material and smaller penalty is better for white
   end;
 
 
@@ -436,17 +339,17 @@ function Evaluate_EasyMate(const Board : TBoard; Eval : integer) : integer;
 
   const
     EdgeBonus : array[0..63] of integer =
-       (17,	 10,	  5,	  2,	  2,	  5,	 10,	 17,
-        10,	  3,   -2,   -5,   -5,   -2,    3,	 10,
-         5,  -4,   -7, 	-10,  -10, 	 -7,   -2,	  5,
-         2,	 -5,  -10,  -13,  -13,  -10,   -5,	  2,
-         2,	 -5,  -10,  -13,  -13,  -10,   -5,	  2,
-         5,  -2,   -7, 	-10,  -10, 	 -7,   -2,	  5,
-        10,	  3,   -2,   -5,   -5,   -2,    3,	 10,
-        17,	 10,	  5,	  2,	  2,	  5,	 10,	 17);
+           (6, 5, 4, 3, 3, 4, 5, 6,
+            5, 4, 3, 2, 2, 3, 4, 5,
+            4, 3, 2, 1, 1, 2, 3, 4,
+            3, 2, 1, 0, 0, 1, 2, 3,
+            3, 2, 1, 0, 0, 1, 2, 3,
+            4, 3, 2, 1, 1, 2, 3, 4,
+            5, 4, 3, 2, 2, 3, 4, 5,
+            6, 5, 4, 3, 3, 4, 5, 6);
 
   var
-    BlackKingCell, WhiteKingCell, FlipCell, index, material : integer;
+    BlackKingCell, WhiteKingCell, DefeatedKingCell, index, material : integer;
 
  // Mate with K vs kxx.
  // Returns score with bonus from white perspective
@@ -457,600 +360,326 @@ function Evaluate_EasyMate(const Board : TBoard; Eval : integer) : integer;
   begin
   BlackKingCell :=  GetLowBit_Alt(Board.Kings and Board.BlackPegs);
   WhiteKingCell :=  GetLowBit_Alt(Board.Kings and Board.WhitePegs);
-  FlipCell := FlipLookup[BlackKingCell];
 
-  index := bitcount(Board.knights) + bitcount(Board.bishops)*3 + bitcount(Board.rooks)*9 + min(bitcount(Board.queens), 1) * 21;
-  Material := Material_Table[index, 0];
-  if bitcount(Board.queens) > 1 then
-    Material := material + SecondQueenValue;
-
-  if Eval > 0 then
-    begin    // white winning
-    result :=  (300 + Material) + EdgeBonus[BlackKingCell] - EdgeBonus[WhiteKingCell] ;
-    result := result - Distance(WhiteKingCell, BlackKingCell) - ManhattanDistance(WhiteKingCell, BlackKingCell);        // white winning : closer together is better for white
-    end
+  if bitcount(Board.WhitePegs) > 1 then         // white winning
+    DefeatedKingCell := BlackKingCell
    else
-    begin    // black winning
-    result :=  -(300 + Material) + EdgeBonus[BlackKingCell] - EdgeBonus[WhiteKingCell];
-    result := result + Distance(WhiteKingCell, BlackKingCell) + ManhattanDistance(WhiteKingCell, BlackKingCell);        // black winning : further apart is better for white
-    end;
+    DefeatedKingCell := WhiteKingCell;
+
+ { if sign(Eval) * (1 - 2*Board.ToPlay) > 0 then
+    bonus := EdgeBonus[BlackKingCell]
+   else
+    bonus := EdgeBonus[WhiteKingCell];  }
+
+  result := sign(Eval) * (1500  +  5 * EdgeBonus[DefeatedKingCell] +  2 * (14 - ManhattanDistance(WhiteKingCell, BlackKingCell)));
   end;
 
 
-class operator T_EndGame_Table.Initialize (out Dest: T_EndGame_Table);
-  var
-    i : integer;
-    Hash : UInt64;
-    Board : TBoard;
+procedure InitializeEndGameLookup;
+  var i, index : integer;
 
   begin
-  for i := 0 to TableSize - 1 do
-    begin
-    Dest.Table[i].ID := 0;
-    Dest.Table[i].EvalFunction := nil;
-    end;
-
+  for i := low(EndGameLookup) to high(EndGameLookup) do
+    EndGameLookup[i] := nil;
 
   // 2-man eval
 
   // k v K  : Draw
-  BoardFromFEN('4k3/8/8/8/8/8/8/4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  index := 0;
+  EndGameLookup[index] := Evaluate_Draw;
 
 
   // 3-man eval
 
-  // kp v K :
-  BoardFromFEN('4k3/8/8/4p3/8/8/8/4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_kp_K);
+  // KP v k
+  index := pawn;
+  EndGameLookup[index] := Evaluate_kp_K;
 
-  // k v KP
-  BoardFromFEN('4k3/8/8/4P3/8/8/8/4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_kp_K);
+  // K v kp  :
+  index := (pawn + 5);
+  EndGameLookup[index] := Evaluate_kp_K;
 
+  // K v kn  : Draw
+  index := (knight + 5);
+  EndGameLookup[index] := Evaluate_Draw;
 
-  // kn v K  : Draw
-  BoardFromFEN('1n2k3/8/8/8/8/8/8/4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // KN v k  : Draw
+  index := knight;
+  EndGameLookup[index] := Evaluate_Draw;
 
-  // k v KN  : Draw
-  BoardFromFEN('4k3/8/8/8/8/8/8/1N2K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // K v kb  : Draw
+  index := (bishop + 5);
+  EndGameLookup[index] := Evaluate_Draw;
 
-  // kb(w) v K  : Draw
-  BoardFromFEN('2b1k3/8/8/8/8/8/8/4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // KB v k  : Draw
+  index := bishop;
+  EndGameLookup[index] := Evaluate_Draw;
 
-  // kb(b) v K  : Draw
-  BoardFromFEN('4kb3/8/8/8/8/8/8/4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // K v kr  : Simple Mate by Black
+  index := (rook + 5);
+  EndGameLookup[index] := Evaluate_EasyMate;
 
-  // k v KB(w)  : Draw
-  BoardFromFEN('4k3/8/8/8/8/8/8/4KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // KR v k  : Simple Mate
+  index := rook;
+  EndGameLookup[index] := Evaluate_EasyMate;
 
-  // k v KB(b)  : Draw
-  BoardFromFEN('4k3/8/8/8/8/8/8/2B1K4 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // K v kq  : Simple Mate
+  index := (queen + 5);
+  EndGameLookup[index] := Evaluate_EasyMate;
 
+  // KQ v k  : Simple Mate
+  index := queen;
+  EndGameLookup[index] := Evaluate_EasyMate;
 
-  // kr v K  : Simple Mate by Black
-  BoardFromFEN('r3k3/8/8/8/8/8/8/4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_EasyMate);
-
-  // k v KR  : Simple Mate
-  BoardFromFEN('4k3/8/8/8/8/8/8/R3K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_EasyMate);
-
-  // kq v K  : Simple Mate
-  BoardFromFEN('3qk3/8/8/8/8/8/8/4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_EasyMate);
-
-  // k v KQ  : Simple Mate
-  BoardFromFEN('4k3/8/8/8/8/8/8/3QK3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_EasyMate);
-
-  // b" = bishop white squares,  b' = bishop black squares
 
   // 4-man eval
 
-  // kn v KN  : Draw
-  BoardFromFEN('1n2k3/8/8/8/8/8/8/1N2K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // KN v kn   : Draw
+  index := knight * 11 + (knight + 5);
+  EndGameLookup[index] := Evaluate_Draw;
 
-  // kb" v KB"  : Draw
-  BoardFromFEN('2b1k3/8/8/8/8/8/8/4KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // KB v kb   : Draw
+  index := bishop * 11 + (bishop + 5);
+  EndGameLookup[index] := Evaluate_Draw;
 
-  // kb" v KB' : Draw
-  BoardFromFEN('2b1k3/8/8/8/8/8/8/2B1K4 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // KB v kn  : Draw
+  index := bishop * 11 + (knight + 5);
+  EndGameLookup[index] := Evaluate_Draw;
 
-  // kb' v KB' : Draw
-  BoardFromFEN('4kb3/8/8/8/8/8/8/2B1K4 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // KN v kb   : Draw
+  index := knight * 11 + (bishop + 5);
+  EndGameLookup[index] := Evaluate_Draw;
 
-  // kb' v KB" : Draw
-  BoardFromFEN('4kb3/8/8/8/8/8/8/4KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // KR v kr    : Draw
+  index := rook * 11 + (rook + 5);
+  EndGameLookup[index] := Evaluate_Draw;
 
-  // kn v KB"  : Draw
-  BoardFromFEN('1n2k3/8/8/8/8/8/8/4KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // KQ v kq    : Draw
+  index := queen * 11 + (queen + 5);
+  EndGameLookup[index] := Evaluate_Draw;
 
-  // kn v KB'  : Draw
-  BoardFromFEN('1n2k3/8/8/8/8/8/8/2B1K4 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // K v knn    : Draw
+  index := (knight + 5) * 11 + (knight + 5);
+  EndGameLookup[index] := Evaluate_Draw;
 
-  // kb" v KN  : Draw
-  BoardFromFEN('2b1k3/8/8/8/8/8/8/1N2K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // KNN v k    : Draw
+  index := knight * 11 + knight;
+  EndGameLookup[index] := Evaluate_Draw;
 
-  // kb' v KN  : Draw
-  BoardFromFEN('4kb3/8/8/8/8/8/8/1N2K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
-
-
-  // kr v KR   : Draw
-  BoardFromFEN('r3k3/8/8/8/8/8/8/R3K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
-
-  // kq v KQ   : Draw
-  BoardFromFEN('3qk3/8/8/8/8/8/8/3QK3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
-
-  // knn v K   : Draw
-  BoardFromFEN('1n2k1n1/8/8/8/8/8/8/4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
-
-  // k v KNN   : Draw
-  BoardFromFEN('4k3/8/8/8/8/8/8/1N2K1N1 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
-
-
-  // kr v KN   : Mostly draw
+  // KN v kr   : Mostly draw
   //           : white win 0.0%  draw 71.8%  black win 28.2%   drawish
-  BoardFromFEN('r3k3/8/8/8/8/8/8/1N2K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  index := knight * 11 + (rook + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
 
-  // kn v KR   : Mostly draw
+  // KR v kn   : Mostly draw
   //           : white win 28.2%  draw 71.8%  black win 0.0%   drawish
-  BoardFromFEN('1n2k3/8/8/8/8/8/8/R3K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  index := rook * 11 + (knight + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
 
-
-  // kr v KB"   : Mostly draw
+  // KB v kr   : Mostly draw
   //           : white win 0.0%  draw 81.6%  black win 18.4%   drawish
-  BoardFromFEN('r3k3/8/8/8/8/8/8/4KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  index := bishop * 11 + (rook + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
 
-  // kr v KB'   : Mostly draw
-  //           : white win 0.0%  draw 81.6%  black win 18.4%   drawish
-  BoardFromFEN('r3k3/8/8/8/8/8/8/2B1K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
 
-  // kb" v KR   : Mostly draw
+  // KR v kb    : Mostly draw
   //            : white win 18.4%  draw 81.6%  black win 0.0%   drawish
-  BoardFromFEN('2b1k3/8/8/8/8/8/8/R3K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  index := rook * 11 + (bishop + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
 
-  // kb' v KR   : Mostly draw
-  //            : white win 18.4%  draw 81.6%  black win 0.0%   drawish
-  BoardFromFEN('4kb2/8/8/8/8/8/8/R3K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  // K v kbb   : Simple Mate by Black
+  index := (bishop + 5) * 11 + (bishop + 5);
+  EndGameLookup[index] := Evaluate_EasyMate;
 
+  // KBB v k   : Simple Mate by White
+  index := bishop * 11 + bishop;
+  EndGameLookup[index] := Evaluate_EasyMate;
 
-  // kbb v K  : Simple Mate by Black
-  BoardFromFEN('2b1kb2/8/8/8/8/8/8/3K4 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_EasyMate);
+  // KR v kq   : Mate by Black
+  index := rook * 11 + (queen + 5);
+  EndGameLookup[index] := Evaluate_EasyMate;
 
-  // k v KBB  : Simple Mate by White
-  BoardFromFEN('4k3/8/8/8/8/8/8/2B1KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_EasyMate);
+  // KQ v kr   : Mate by White
+  index := queen * 11 + (rook + 5);
+  EndGameLookup[index] := Evaluate_EasyMate;
 
-  // kq v KR  : Mate by Black
-  BoardFromFEN('3qk3/8/8/8/8/8/8/R3K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_EasyMate);
+  // KB v kq   : Mate by Black
+  index := bishop * 11 + (queen + 5);
+  EndGameLookup[index] := Evaluate_EasyMate;
 
-  // kr v KQ  : Mate by White
-  BoardFromFEN('r3k3/8/8/8/8/8/8/3QK3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_EasyMate);
+  // KQ v kb   : Mate by White
+  index := queen * 11 + (bishop + 5);
+  EndGameLookup[index] := Evaluate_EasyMate;
 
-  // kq v KB'  : Mate by Black
-  BoardFromFEN('3qk3/8/8/8/8/8/8/2B1K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_EasyMate);
+  // KN v kq   : Mate by Black
+  index := knight * 11 + (queen + 5);
+  EndGameLookup[index] := Evaluate_EasyMate;
 
-  // kq v KB"  : Mate by Black
-  BoardFromFEN('3qk3/8/8/8/8/8/8/4KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_EasyMate);
+  // KQ v kn   : Mate by White
+  index := queen * 11 + (knight + 5);
+  EndGameLookup[index] := Evaluate_EasyMate;
 
-  // kb" v KQ  : Mate by White
-  BoardFromFEN('2b1k3/8/8/8/8/8/8/3QK3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_EasyMate);
+  // K v knb    : Mate
+  index := (knight + 5) * 11 + (bishop + 5);
+  EndGameLookup[index] := Evaluate_BN;
+  index := (bishop + 5) * 11 + (knight + 5);
+  EndGameLookup[index] := Evaluate_BN;
 
+  // KNB v k    : Mate
+  index := knight * 11 + bishop;
+  EndGameLookup[index] := Evaluate_BN;
+  index := bishop * 11 + knight;
+  EndGameLookup[index] := Evaluate_BN;
 
-  // kb' v KQ  : Mate by White
-  BoardFromFEN('4kb2/8/8/8/8/8/8/3QK3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_EasyMate);
-
-  // kq v KN  : Mate by Black
-  BoardFromFEN('3qk3/8/8/8/8/8/8/1N2K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_EasyMate);
-
-  // kn v KQ  : Mate by White
-  BoardFromFEN('1n2k3/8/8/8/8/8/8/3QK3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_EasyMate);
-
-  // knb" v K   : Mate
-  BoardFromFEN('1nb1k3/8/8/8/8/8/8/4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_BN);
-
-  // knb' v K   : Mate
-  BoardFromFEN('1n2kb2/8/8/8/8/8/8/4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_BN);
-
-  // k v KNB"   : Mate
-  BoardFromFEN('4k3/8/8/8/8/8/8/1N2KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_BN);
-
-  // k v KNB'   : Mate
-  BoardFromFEN('4k3/8/8/8/8/8/8/1NB1K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_BN);
-
-
-  // kp v KB"  : drawish : don't want to exchange into this position
+  // KB v kp   : drawish : don't want to exchange into this position
   //           : white win  0.0%  draw 85.1%  black win 14.6%   drawish
-  BoardFromFEN('4k3/p7/8/8/8/8/8/4KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  index := bishop * 11 + (pawn + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
 
-  // kp v KB'  : drawish : don't want to exchange into this position
-  //           : white win  0.0%  draw 85.1%  black win 14.6%   drawish
-  BoardFromFEN('4k3/p7/8/8/8/8/8/2B1K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
-
-  // kb" v KP  : drawish : don't want to exchange into this position
+  // KP v kb   : drawish : don't want to exchange into this position
   //           : white win  14.6%  draw 85.1%  black win 0.0%   drawish
-  BoardFromFEN('2b1k3/8/8/8/8/8/P7/4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  index := pawn * 11 + (bishop + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
 
-  // kb' v KP  : drawish : don't want to exchange into this position
-  //           : white win  14.6%  draw 85.1%  black win 0.0%   drawish
-  BoardFromFEN('4kb2/8/8/8/8/8/P7/4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
-
-
-  // kp v KN  : drawish : don't want to exchange into this position
+  // KN v kp  : drawish : don't want to exchange into this position
   //          : white win  0.0%  draw 77.0%  black win 23.0%   drawish
-  BoardFromFEN('4k3/p7/8/8/8/8/8/1N2K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  index := knight * 11 + (pawn + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
 
-  // kn v KP  : drawish : don't want to exchange into this position
+  // KP v kn  : drawish : don't want to exchange into this position
   //          : white win 23.0%  draw 77.0%  black win 0.0%   drawish
-  BoardFromFEN('1n2k3/8/8/8/8/8/P7/4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
-
+  index := pawn * 11 + (knight + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
 
 
   // 5-man eval
 
-  // kb" v KB'B"  : Draw
-  BoardFromFEN('2b1k3/8/8/8/8/8/8/2B1KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // KBB v kb  : Draw
+  index := bishop * 121 + bishop * 11 + (bishop + 5);
+  EndGameLookup[index] := Evaluate_Draw;
 
-  // kb' v KB'B"  : Draw
-  BoardFromFEN('4kb2/8/8/8/8/8/8/2B1KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // KB v kbb   : Draw
+  index := bishop * 121 + (bishop + 5) * 11 + (bishop + 5);
+  EndGameLookup[index] := Evaluate_Draw;
 
-  // kb'b" v KB"  : Draw
-  BoardFromFEN('2b1kb2/8/8/8/8/8/8/4KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // KBB v kr   : Draw
+  //            : white win 8.8%  draw 90.5%  black win 0.7%
+  index := bishop * 121 + bishop * 11 + (rook + 5);
+  EndGameLookup[index] := Evaluate_Draw;
 
-  // kb'b" v KB'  : Draw
-  BoardFromFEN('2b1kb2/8/8/8/8/8/8/2B1K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // KR v kbb   : Draw
+  //            : white win 0.7%  draw 90.5%  black win 8.8%
+  index := rook * 121 + (bishop + 5) * 11 + (bishop + 5);
+  EndGameLookup[index] := Evaluate_Draw;
 
+  // KBN v kr   : drawish : don't want to exchange into this position
+  //            : white win 13.8%  draw 84.1%  black win 2.0%
+  index := bishop * 121 + knight * 11 + (rook + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
+  index := knight * 121 + bishop * 11 + (rook + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
 
-  // kr v KB'B"  : Draw
-  //             : white win 8.8%  draw 90.5%  black win 0.7%
-  BoardFromFEN('r3k3/8/8/8/8/8/8/2B1KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
-
-  // kb'b" v KR  : Draw
-  //             : white win 0.7%  draw 90.5%  black win 8.8%
-  BoardFromFEN('2b1kb2/8/8/8/8/8/8/R4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
-
-
-  // kr v KB"N  : drawish : don't want to exchange into this position
-  //              : white win 13.8%  draw 84.1%  black win 2.0%
-  BoardFromFEN('r3k3/8/8/8/8/8/8/1N2KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
-
-  // kr v KB'N  : drawish : don't want to exchange into this position
-  //              : white win 13.8%  draw 84.1%  black win 2.0%
-  BoardFromFEN('r3k3/8/8/8/8/8/8/1NB1K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
-
-
-  // kb'n v KR  : drawish : don't want to exchange into this position
+  // KR v kbn   : drawish : don't want to exchange into this position
   //            : white win 2.0%  draw 84.1%  black win 13.8%
-  BoardFromFEN('1n2kb2/8/8/8/8/8/8/R4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  index := rook * 121 + (bishop + 5) * 11 + (knight + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
+  index := rook * 121 + (knight + 5) * 11 + (bishop + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
 
-  // kb"n v KR  : drawish : don't want to exchange into this position
-  //            : white win 2.0%  draw 84.1%  black win 13.8%
-  BoardFromFEN('1nb1k3/8/8/8/8/8/8/R4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  // KN v knn   : Draw
+  index := knight * 121 + (knight + 5) * 11 + (knight + 5);
+  EndGameLookup[index] := Evaluate_Draw;
 
+  // KNN v kn   : Draw
+  index := knight * 121 + knight * 11 + (knight + 5);
+  EndGameLookup[index] := Evaluate_Draw;
 
-  // knn v KN  : Draw
-  BoardFromFEN('1n2k1n1/8/8/8/8/8/8/1N2K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // KB v knn   : Draw
+  index := bishop * 121 + (knight + 5) * 11 + (knight + 5);
+  EndGameLookup[index] := Evaluate_Draw;
 
-  // kn v KNN  : Draw
-  BoardFromFEN('1n2k3/8/8/8/8/8/8/1N2K1N1 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  // KNN v kb   : Draw
+  index := knight * 121 + knight * 11 + (bishop + 5);
+  EndGameLookup[index] := Evaluate_Draw;
 
-
-  // knn v KB'  : Draw
-  BoardFromFEN('1n2k1n1/8/8/8/8/8/8/2B1K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
-
-  // knn v KB"  : Draw
-  BoardFromFEN('1n2k1n1/8/8/8/8/8/8/4KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
-
-  // kb" v KNN  : Draw
-  BoardFromFEN('2b1k3/8/8/8/8/8/8/1N2K1N1 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
-
-  // kb' v KNN  : Draw
-  BoardFromFEN('4kb2/8/8/8/8/8/8/1N2K1N1 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
-
-
-  // knn v KR  : Draw
+  // KR v knn  : Draw
   //           : white win 3.2%  draw 96.8%  black win 0.0%
-  BoardFromFEN('1n2k1n1/8/8/8/8/8/8/R3K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
+  index := rook * 121 + (knight + 5) * 11 + (knight + 5);
+  EndGameLookup[index] := Evaluate_Draw;
 
-  // kr v KNN  : Draw
+  // KNN v kr  : Draw
   //           : white win 0.0%  draw 96.8%  black win 3.2%
-  BoardFromFEN('r3k3/8/8/8/8/8/8/1N2K1N1 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_Draw);
-
+  index := knight * 121 + knight * 11 + (rook + 5);
+  EndGameLookup[index] := Evaluate_Draw;
 
 
   // TODO expand this with dedicated evaluation
 
-  // krp v KR  : winable but dificult
+  // KR v krp  : winable but dificult
   //           : white win 10.4%  draw 43.9%  black win 45.8%
-  BoardFromFEN('r3k3/p7/8/8/8/8/8/R3K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  index := rook * 121 + (rook + 5) * 11 + (pawn + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
+  index := rook * 121 + (pawn + 5) * 11 + (rook + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
 
-  // kr v KRP  : winable but dificult
+  // KRP v kr  : winable but dificult
   //           : white win 45.8%  draw 43.9%  black win 10.4%
-  BoardFromFEN('r3k3/8/8/8/8/8/P7/R4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  index := rook * 121 + pawn * 11 + (rook + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
+  index := pawn * 121 + rook * 11 + (rook + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
 
-
-
-  // kb"p v KB"  : drawish : don't want to exchange into this position
-  //             : white win  0.0%  draw 73.0%  black win 27.0%   drawish
-  BoardFromFEN('2b1k3/p7/8/8/8/8/8/4KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
-
-  // kb"p v KB' : drawish : don't want to exchange into this position
-  //                : white win  0.0%  draw 73.0%  black win 27.0%   drawish
-  BoardFromFEN('2b1k3/p7/8/8/8/8/8/2B1K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
-
-  // kb'p v KB' : drawish : don't want to exchange into this position
+  // KB v kbp   : drawish : don't want to exchange into this position
   //            : white win  0.0%  draw 73.0%  black win 27.0%   drawish
-  BoardFromFEN('4kb2/p7/8/8/8/8/8/2B1K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
-
-  // kb'p v KB" : drawish : don't want to exchange into this position
-  //            : white win  0.0%  draw 73.0%  black win 27.0%   drawish
-  BoardFromFEN('4kb2/p7/8/8/8/8/8/4KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  index := bishop * 121 + (bishop + 5) * 11 + (pawn + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
+  index := bishop * 121 + (pawn + 5) * 11 + (bishop + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
 
 
-  // kb" v KB"P  : drawish : don't want to exchange into this position
-  //             : white win 27.0%  draw 73.0%  black win 0.0%   drawish
-  BoardFromFEN('2b1k3/8/8/8/8/8/P7/4KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
-
-  // kb' v KB"P : drawish : don't want to exchange into this position
+  // KBP v kb   : drawish : don't want to exchange into this position
   //            : white win 27.0%  draw 73.0%  black win 0.0%   drawish
-  BoardFromFEN('4kb2/8/8/8/8/8/P7/4KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  index := bishop * 121 + pawn * 11 + (bishop + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
+  index := pawn * 121 + bishop * 11 + (bishop + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
 
-  // kb" v KB'P : drawish : don't want to exchange into this position
-  //            : white win 27.0%  draw 73.0%  black win 0.0%   drawish
-  BoardFromFEN('2b1k3/8/8/8/8/8/P7/2B1K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
-
-  // kb' v KB'P : drawish : don't want to exchange into this position
-  //            : white win 27.0%  draw 73.0%  black win 0.0%   drawish
-  BoardFromFEN('4kb2/8/8/8/8/8/P7/2B1K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
-
-
-
-  // kb' v KPP  : drawish : don't want to exchange into this position
+  // KPP v kb   : drawish : don't want to exchange into this position
   //            : white win 40.1%  draw 59.9%  black win 0.0%   drawish
-  BoardFromFEN('4kb2/8/8/8/8/8/PP6/4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  index := pawn * 121 + pawn * 11 + (bishop + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
 
-  // kb" v KPP  : drawish : don't want to exchange into this position
-  //            : white win 40.1%  draw 59.9%  black win 0.0%   drawish
-  BoardFromFEN('2b1k3/8/8/8/8/8/PP6/4K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
-
-  // kpp v KB'  : drawish : don't want to exchange into this position
+  // KB v kpp   : drawish : don't want to exchange into this position
   //            : white win 0.0%  draw 59.9%  black win 40.1%  drawish
-  BoardFromFEN('4k3/pp6/8/8/8/8/8/2B1K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  index := bishop * 121 + (pawn + 5) * 11 + (pawn + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
 
-  // kpp v KB"  : drawish : don't want to exchange into this position
-  //            : white win 0.0%  draw 59.9%  black win 40.1%  drawish
-  BoardFromFEN('4k3/pp6/8/8/8/8/8/4KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
-
-
-  // kn v KPP  : drawish : don't want to exchange into this position
+  // KPP v kn  : drawish : don't want to exchange into this position
   //           : white win 51.3%  draw 48.7%  black win 0.0%   drawish
-  BoardFromFEN('4kb2/8/8/8/8/8/PP6/2B1K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  index := pawn * 121 + pawn * 11 + (knight + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
 
-  // kpp v KN  : drawish : don't want to exchange into this position
+  // KN v kpp  : drawish : don't want to exchange into this position
   //           : white win 0.0%  draw 48.7%  black win 51.3%   drawish
-  BoardFromFEN('4k3/pp6/8/8/8/8/8/4KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  index := knight * 121 + (pawn + 5) * 11 + (pawn + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
 
 
-  // knn v KP  : drawish : don't want to exchange into this position
+  // KP v knn  : drawish : don't want to exchange into this position
   //           : white win 7.9%  draw 70.3%  black win 14.6%   drawish
-  BoardFromFEN('4kb2/8/8/8/8/8/PP6/2B1K3 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  index := pawn * 121 + (knight + 5) * 11 + (knight + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
 
-  // kp v KNN  : drawish : don't want to exchange into this position
+  // KNN v kp  : drawish : don't want to exchange into this position
   //           : white win 14.6%  draw 70.3%  black win 7.9%   drawish
-  BoardFromFEN('4k3/pp6/8/8/8/8/8/4KB2 w - - 0 1', Board);
-  Hash := MaterialHashFromBoard(Board);
-  Dest.AddCase(Hash, Evaluate_MostlyDraw);
+  index := knight * 121 + knight * 11 + (pawn + 5);
+  EndGameLookup[index] := Evaluate_MostlyDraw;
   end;
 
 
- procedure T_EndGame_Table.AddCase(MaterialHash : UInt64; EvalFunction : TEvalFunction);
-  var
-    index, stop : integer;
+initialization
 
-  begin
-  index := UInt(MaterialHash and TableMask);
-  stop := (index + MaxLink) and TableMask;
-
-    repeat
-    if (Table[index].ID = 0) or (Table[index].ID = MaterialHash) then
-      begin
-      Table[index].ID := MaterialHash;
-      Table[index].EvalFunction := EvalFunction;
-      exit;
-      end;
-
-    index := (index + 1) and TableMask;
-    until index = stop;
-  end;
-
-
-function T_EndGame_Table.RetrieveEval(MaterialHash : UInt64) : TEvalFunction;
-  var
-    index, stop : integer;
-
-  begin
-  index := UInt(MaterialHash and TableMask);
-  stop := (index + MaxLink) and TableMask;
-
-    repeat
-    if Table[index].ID = MaterialHash then
-      begin
-      result := Table[index].EvalFunction;
-      exit;
-      end;
-
-    index := (index + 1) and TableMask;
-    until index = stop;
-
-  result := nil;
-  end;
+  InitializeEndGameLookup;
 
 
 end.

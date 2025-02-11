@@ -1,7 +1,7 @@
 //  The MIT License (MIT)
 
 //  Chess Engine Yakka
-//  Copyright (c) 2024 Christopher Crone
+//  Copyright (c) 2025 Christopher Crone
 
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal
@@ -30,7 +30,10 @@ function PopCnt_Supported : boolean;
 function BMI2_Supported : boolean;
 function SSE_Supported : boolean;
 function SSE2_Supported : boolean;
-
+function AVX_Supported : boolean;
+function AVX2_Supported : boolean;
+function AVX512f_Supported : boolean;
+function AVX512fp16_Supported : boolean;
 
 implementation
 
@@ -75,6 +78,9 @@ function SSE_Supported : boolean;
   end;
 
 
+// SEE2 required for CVTSD2SI instruction used in unit : Net
+// Convert Scalar Double-Precision FP Value to Integer
+
 function SSE2_Supported : boolean;
   asm
   PUSH RBX
@@ -85,5 +91,57 @@ function SSE2_Supported : boolean;
   SHR RAX, $1A
   POP RBX
   end;
+
+
+function AVX_Supported : boolean;
+  asm
+  PUSH RBX
+  MOV EAX, $1
+  CPUID
+  AND ECX, $10000000             // bit 28 of ECX
+  MOV RAX, RCX
+  SHR RAX, $1C
+  POP RBX
+  end;
+
+
+function AVX2_Supported : boolean;
+  asm
+  PUSH RBX
+  MOV EAX, $7
+  XOR ECX, ECX
+  CPUID
+  AND EBX, $20          // bit 5 of EBX
+  MOV RAX, RBX
+  SHR RAX, $5
+  POP RBX
+  end;
+
+
+function AVX512f_Supported : boolean;
+  asm
+  PUSH RBX
+  MOV EAX, $7
+  XOR ECX, ECX
+  CPUID
+  AND EBX, $1000      // bit 16 of EBX
+  MOV RAX, RBX
+  SHR RAX, $10
+  POP RBX
+  end;
+
+
+function AVX512fp16_Supported : boolean;
+  asm
+  PUSH RBX
+  MOV EAX, $7
+  XOR ECX, ECX
+  CPUID
+  AND EDX, $800000      // bit 23 of EDX
+  MOV RAX, RDX
+  SHR RAX, $17
+  POP RBX
+  end;
+
 
 end.

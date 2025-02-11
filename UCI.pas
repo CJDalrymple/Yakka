@@ -1,7 +1,7 @@
 //  The MIT License (MIT)
 
 //  Chess Engine Yakka
-//  Copyright (c) 2024 Christopher Crone
+//  Copyright (c) 2025 Christopher Crone
 
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal
@@ -32,7 +32,6 @@ interface
                    tok_WhiteSpace,
                    tok_Empty,
                    tok_EOL,
-
                    tok_uci,
                    tok_debug,
                    tok_isready,
@@ -520,6 +519,13 @@ procedure DisplayID(CurrentName, CurrentVersion, Author : string);      // respo
   end;
 
 
+procedure WriteMessage(const msg : string);
+  begin
+  writeln(output, AnsiString(msg));
+  flush(output);
+  end;
+
+
 procedure Initialize_Engine(var PVS_Search : TSearch);
   begin
   if assigned(PVS_Search) = false then
@@ -532,6 +538,8 @@ procedure Initialize_Engine(var PVS_Search : TSearch);
     PVS_Search.UseOwnBook := false;
     if PVS_Search.TransTable.TableSize <> 64 * 65_536 then
       PVS_Search.TransTable.SetTableSize(64);
+
+    PVS_Search.OnMessage := WriteMessage;
     end;
   end;
 
