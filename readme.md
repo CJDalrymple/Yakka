@@ -36,6 +36,7 @@ To build the engine from source, use Delphi 12.0 Alexandra or later version.
   - Import the source files from GitHub repository
   - Set Target Platform to Windows 64-bit
   - Open Project Resources and Images..., add the following to Resource Files:
+
       File Name : 'Opening_Book_00.txt'
       Type : RCDATA
       Identifier : Open_Book 
@@ -43,6 +44,7 @@ To build the engine from source, use Delphi 12.0 Alexandra or later version.
       File Name : 'NNUE 1536x64 rev 50.net'
       Type : RCDATA
       Identifier : _1536x64_v1
+    
   - Build 'Yakka'
 
 ## Functional Details
