@@ -26,91 +26,151 @@ unit UCI;
 
 interface
   uses
-    System.Classes, System.SysUtils, System.StrUtils, System.Character, GameDef, Common, Search;
+    System.Classes, System.SysUtils, System.StrUtils, System.Character, System.Math, GameDef, Common, Search;
 
-  type TTokenKind = (tok_Undefined,
-                   tok_WhiteSpace,
-                   tok_Empty,
-                   tok_EOL,
-                   tok_uci,
-                   tok_debug,
-                   tok_isready,
-                   tok_ucinewgame,
+  type TTokenKind =
+        (tok_Undefined,
+         tok_WhiteSpace,
+         tok_Empty,
+         tok_EOL,
+         tok_uci,
+         tok_debug,
+         tok_isready,
+         tok_ucinewgame,
 
-                   tok_position,
-                     tok_fen,
-                     tok_startpos,
-                     tok_moves,
-                     tok_move,
-                     tok_testpos,
+         tok_position,
+           tok_fen,
+           tok_startpos,
+           tok_moves,
+           tok_move,
+           tok_testpos,
 
-                   tok_stop,
-                   tok_ponderhit,
-                   tok_quit,
-                   tok_q,
+         tok_stop,
+         tok_ponderhit,
+         tok_quit,
+         tok_q,
 
-                   tok_go,
-                     tok_searchmoves,
+         tok_go,
+           tok_searchmoves,
 
-                     tok_ponder,
+           tok_ponder,
 
-                     tok_wtime,
-                     tok_btime,
-                     tok_winc,
-                     tok_binc,
-                     tok_movestogo,
-                     tok_depth,
-                     tok_nodes,
-                     tok_mate,
+           tok_wtime,
+           tok_btime,
+           tok_winc,
+           tok_binc,
+           tok_movestogo,
+           tok_depth,
+           tok_nodes,
+           tok_mate,
 
-                     tok_movetime,
-                     tok_infinite,
+           tok_movetime,
+           tok_infinite,
 
-                   tok_setoption,
+         tok_setoption,
 
-                     tok_name,
+           tok_name,
 
-                       tok_Hash,
-                       tok_ClearHash,
-                       tok_Threads,
-                       tok_OwnBook,
-                       tok_EngineAbout,
+             tok_Hash,
+             tok_ClearHash,
+             tok_Threads,
+             tok_OwnBook,
+             tok_EngineAbout,
+             tok_ShowWDL,
+             tok_MultiPV,
 
-                   tok_type,
-                   tok_default,
-                   tok_min,
-                   tok_max,
-                   tok_var,
-                   tok_value,
+         tok_type,
+         tok_default,
+         tok_min,
+         tok_max,
+         tok_var,
+         tok_value,
 
-                   tok_true,
-                   tok_false,
+         tok_true,
+         tok_false,
 
-                   tok_number,
-                   tok_string,
+         tok_number,
+         tok_string,
 
-                   tok_draw
+         tok_draw,
+         tok_d);
 
-                   );
+
+  const  KeyWords : array[0..51] of AnsiString = (
+        '',
+        '',
+        '',
+        '',
+        'uci',
+        'debug',
+        'isready',
+        'ucinewgame',
+        'position',
+        'fen',
+        'startpos',
+        'moves',
+        '',
+        'testpos',
+        'stop',
+        'ponderhit',
+        'quit',
+        'q',
+        'go',
+        'searchmoves',
+        'ponder',
+        'wtime',
+        'btime',
+        'winc',
+        'binc',
+        'movestogo',
+        'depth',
+        'nodes',
+        'mate',
+        'movetime',
+        'infinite',
+        'setoption',
+        'name',
+        'hash',
+        'clear',
+        'threads',
+        'ownbook',
+        'uci_engineabout',
+        'uci_showwdl',
+        'multipv',
+        '',
+        '',
+        '',
+        '',
+        '',
+        'value',
+        'true',
+        'false',
+        '',
+        '',
+        'draw',
+        'd');
+
+type
+  TTag = array[0..15] of byte;
 
 type
   TLexer = record
     FCurChar : PAnsiChar;
 
     FTokenKind : TTokenKind;
-    FToken : string;
+    FToken : Ansistring;
 
     procedure Initialize(Text : PAnsiChar);
-    procedure Advance;
-    function  NextChar : PAnsiChar;
-    procedure SkipWhiteSpace;
+    procedure Advance;                          inline;
+    function  NextChar : PAnsiChar;             inline;
+    procedure SkipWhiteSpace;                   inline;
 
     procedure GetNumber;
     procedure GetNextToken;
     procedure GetString;
     end;
 
-procedure DisplayID(CurrentName, CurrentVersion, Author : string);
+procedure DisplayID(CurrentName, CurrentVersion, Author : Ansistring);
 procedure CheckIsReady(var PVS_Search : TSearch);
 procedure Initialize_Engine(var PVS_Search : TSearch);
 procedure New_Game(var Board : TBoard; var GameMoveList : TGameMoveList; var PVS_Search : TSearch);
@@ -155,14 +215,50 @@ procedure TLexer.SkipWhiteSpace;
     Advance;
   end;
 
-procedure TLexer.GetNextToken;
+
+function TagMatch(const tag : TTag; const str : AnsiString) : boolean;
   var
-    Start : PAnsiChar;
-    S : AnsiString;
-    Str : string;
+    i : integer;
 
   begin
+  result := true;
+  if tag[0] <> length(str) then
+    exit(false);
 
+  for i := 1 to tag[0] do
+    if tag[i] <> ord(str[i]) then
+      exit(false);
+  end;
+
+
+procedure TLexer.GetNextToken;
+
+ const
+    Lookup : array[1..128] of integer =
+
+        ( 0,  0,  0,  0,  0,  0,  0,  0,
+         25,  4, 21,  0, 46, 30,  0, 25,
+          3,  1,  0,  0,  5,  0, 15,  0,
+          0,  0, 25,  4,  0,  1, 18,  0,
+          0,-19, 15,  9,  3,  0,  0,  0,
+          0,  0, 14, 10, 25, 16, 26, 15,
+          8,  0,  0, 33,  0,  2,  8,  1,
+         13,  0,  0,  0,  7,  0,  0, 23,
+          3,  3, 10, 10, 16,  1, 43,  0,
+          3, 20,  4,  0,  0, 20,  7,  0,
+          0,  3,  7, 28,  0,-16, 23,  0,
+          0,  0,  0,  0,  0,  0,  0,  0,
+          0,  0, 29, 32,  0,  2,  0, 14,
+         23,  0,  0, 15, 23,  2,  0,  0,
+          0,  0,  0,  0,  0,  0,  0, 17,
+          0,  0,  0,  0,  0,  0,  0,  0);
+
+  var
+    i, len, f1, f2 : integer;
+    Start : PAnsiChar;
+    Tag : TTag;
+
+  begin
   if Char(FCurChar^).IsWhiteSpace then
     SkipWhiteSpace;
 
@@ -177,256 +273,40 @@ procedure TLexer.GetNextToken;
   while AnsiChar(FCurChar^) in ['a'..'z', 'A'..'Z', '_'] do
     Advance;
 
-  SetString(S, Start, FCurChar - Start);
-  Str := ToLower(S);
-
-  if Str = 'uci' then
+  len := min(FCurChar - Start, high(Tag));          // Tag is max 15 characters = length of longest keyword
+  Tag[0] :=  len;
+  for i := 1 to len do
     begin
-    FTokenKind := tok_uci;
-    FToken := 'uci';
-    exit;
+    Tag[i] := ord(Start[i-1]);
+    if (Tag[i] <= 90) and (Tag[i] >= 65) then   // converts to Lowercase
+      Tag[i] := Tag[i] + 32;
     end;
 
-  if Str = 'debug' then
+  FTokenKind := tok_Undefined;
+
+  if len > 0 then
     begin
-    FTokenKind := tok_debug;
-    FToken := 'debug';
-    exit;
+    f1 := 3 * (Tag[1] - 96) + len;                          // perfect hash to obtain tokenkind directly
+    f2 := min((5 * (Tag[max(len-1, 1)] - 96) + len), 128);
+
+    FTokenKind := TTokenKind(Lookup[f1] + Lookup[f2]);
+
+    if TagMatch(Tag, Keywords[Ord(FTokenKind)]) = false then       // check for exact match
+      FTokenKind := tok_Undefined;
+
+    // FToken := KeyWords[Ord(FTokenKind)];
+
+    if (FTokenKind = tok_fen) or (FTokenKind = tok_moves) then
+      Advance;
+
+    if FTokenKind = tok_d then
+      FTokenKind := tok_draw
+     else if FTokenKind = tok_q then
+      FTokenKind := tok_quit;
     end;
 
-  if Str = 'isready' then
-    begin
-    FTokenKind := tok_isready;
-    FToken := 'isready';
+  if FTokenKind <> tok_Undefined then
     exit;
-    end;
-
-  if Str = 'ucinewgame' then
-    begin
-    FTokenKind := tok_ucinewgame;
-    FToken := 'ucinewgame';
-    exit;
-    end;
-
-  if Str = 'stop' then
-    begin
-    FTokenKind := tok_stop;
-    FToken := 'stop';
-    exit;
-    end;
-
-  if Str = 'testpos' then
-    begin
-    FTokenKind := tok_testpos;
-    FToken := 'test';
-    exit;
-    end;
-
-  if (Str = 'quit') or (S = 'q') then
-    begin
-    FTokenKind := tok_quit;
-    FToken := 'quit';
-    exit;
-    end;
-
-  if Str = 'ponderhit' then
-    begin
-    FTokenKind := tok_ponderhit;
-    FToken := 'ponderhit';
-    exit;
-    end;
-
-  if Str = 'position' then
-    begin
-    FTokenKind := tok_position;
-    FToken := 'position';
-    exit;
-    end;
-
-  if Str = 'fen' then
-    begin
-    FTokenKind := tok_fen;
-    FToken := 'fen';
-    Advance;
-    exit;
-    end;
-
-  if Str = 'startpos' then
-    begin
-    FTokenKind := tok_startpos;
-    FToken := 'startpos';
-    Advance;
-    exit;
-    end;
-
-  if Str = 'moves' then
-    begin
-    FTokenKind := tok_moves;
-    FToken := 'moves';
-    Advance;
-    exit;
-    end;
-
-  if Str = 'go' then
-    begin
-    FTokenKind := tok_go;
-    FToken := 'go';
-    exit;
-    end;
-
-  if Str = 'searchmoves' then
-    begin
-    FTokenKind := tok_searchmoves;
-    FToken := 'searchmoves';
-    exit;
-    end;
-
-  if Str = 'wtime' then
-    begin
-    FTokenKind := tok_wtime;
-    FToken := 'wtime';
-    exit;
-    end;
-
-  if Str = 'btime' then
-    begin
-    FTokenKind := tok_btime;
-    FToken := 'btime';
-    exit;
-    end;
-
-  if Str = 'winc' then
-    begin
-    FTokenKind := tok_winc;
-    FToken := 'winc';
-    exit;
-    end;
-
-  if Str = 'binc' then
-    begin
-    FTokenKind := tok_binc;
-    FToken := 'binc';
-    exit;
-    end;
-
-  if Str = 'movestogo' then
-    begin
-    FTokenKind := tok_movestogo;
-    FToken := 'movestogo';
-    exit;
-    end;
-
-  if Str = 'depth' then
-    begin
-    FTokenKind := tok_depth;
-    FToken := 'depth';
-    exit;
-    end;
-
-  if Str = 'nodes' then
-    begin
-    FTokenKind := tok_nodes;
-    FToken := 'nodes';
-    exit;
-    end;
-
-  if Str = 'mate' then
-    begin
-    FTokenKind := tok_mate;
-    FToken := 'mate';
-    exit;
-    end;
-
-  if Str = 'movetime' then
-    begin
-    FTokenKind := tok_movetime;
-    FToken := 'movetime';
-    exit;
-    end;
-
-  if Str = 'infinite' then
-    begin
-    FTokenKind := tok_infinite;
-    FToken := 'infinite';
-    exit;
-    end;
-
-  if (Str = 'draw') or (Str = 'd') then
-    begin
-    FTokenKind := tok_draw;
-    FToken := 'draw';
-    exit;
-    end;
-
-  if Str = 'setoption' then
-    begin
-    FTokenKind := tok_setoption;
-    FToken := 'setoption';
-    exit;
-    end;
-
-  if Str = 'name' then
-    begin
-    FTokenKind := tok_name;
-    FToken := 'name';
-    exit;
-    end;
-
-  if Str = 'value' then
-    begin
-    FTokenKind := tok_value;
-    FToken := 'value';
-    exit;
-    end;
-
-  if Str = 'hash' then
-    begin
-    FTokenKind := tok_Hash;
-    FToken := 'hash';
-    exit;
-    end;
-
-  if Str = 'clear' then
-    begin
-    FTokenKind := tok_clearHash;
-    FToken := 'clear hash';
-    exit;
-    end;
-
-  if Str = 'threads' then
-    begin
-    FTokenKind := tok_threads;
-    FToken := 'threads';
-    exit;
-    end;
-
-  if Str = 'ownbook' then
-    begin
-    FTokenKind := tok_ownBook;
-    FToken := 'ownBook';
-    exit;
-    end;
-
-  if Str = 'false' then
-    begin
-    FTokenKind := tok_false;
-    FToken := 'false';
-    exit;
-    end;
-
-  if Str = 'true' then
-    begin
-    FTokenKind := tok_true;
-    FToken := 'true';
-    exit;
-    end;
-
-  if Str = 'uci_engineabout' then
-    begin
-    FTokenKind := tok_EngineAbout;
-    FToken := 'UCI_EngineAbout';
-    exit;
-    end;
 
   if FCurChar^ = #13 then
     begin
@@ -441,6 +321,7 @@ procedure TLexer.GetNextToken;
     FToken := FCurChar^;
     exit;
     end;
+
   end;
 
 
@@ -497,7 +378,7 @@ procedure TLexer.GetString;
   end;
 
 
-procedure DisplayID(CurrentName, CurrentVersion, Author : string);      // response to 'uci'
+procedure DisplayID(CurrentName, CurrentVersion, Author : Ansistring);      // response to 'uci'
   begin
   WriteLn(output, AnsiString(' '));
 
@@ -506,9 +387,14 @@ procedure DisplayID(CurrentName, CurrentVersion, Author : string);      // respo
 
   WriteLn(output, AnsiString(' '));
 
+  WriteLn(output, AnsiString('option name Threads type spin default 1 min 1 max 16'));
   WriteLn(output, AnsiString('option name Hash type spin default 64 min 1 max 256'));
   WriteLn(output, AnsiString('option name Clear Hash type button'));
-  WriteLn(output, AnsiString('option name Threads type spin default 1 min 1 max 16'));
+  WriteLn(output, AnsiString('option name Ponder type check default false'));
+
+  //  WriteLn(output, AnsiString('option name MultiPV type spin default 1 min 1 max 32'));
+  //  WriteLn(output, AnsiString('option name UCI_ShowWDL type check default false'));
+
   WriteLn(output, AnsiString('option name OwnBook type check default false'));
   WriteLn(output, AnsiString('option name UCI_EngineAbout type string default ' + CurrentName + ' ' + CurrentVersion + ' by ' + Author));
 
@@ -610,90 +496,85 @@ procedure SetupTestPosition(var Board : TBoard; var GameMoveList : TGameMoveList
 
 function MakeMoves(var Board : TBoard; var GameMoveList : TGameMoveList; S : PAnsiChar) : boolean;  // if sucessful then returns true, if error then returns false
   var
-    Moves_text : TStringList;
-    movestr : string;
-    i, FileNo, Rank, source, dest : integer;
+    FileNo, Rank, source, dest : integer;
     Piece, CapturedPiece, PromotionPiece, epCell : integer;
-    ValidDest, Move: UInt64;
+    Move: TMove;
 
   begin
-  result := true;
+  result := false;
 
   // <move1> .... <movei>
 
-  Moves_text := TStringList.Create;
-
-    try
-    Moves_text.StrictDelimiter := false;
-    Moves_text.DelimitedText := S;
-
-    for i := 0 to Moves_Text.Count - 1 do
+    repeat
       begin
-      movestr := Moves_text[i];
-
-      FileNo :=  Ord(Char(movestr[1])) - Ord(Char('a'));
-      Rank := StrToInt(movestr[2]) - 1;
-      Source := 8*(7-Rank) + FileNo;
-
-      FileNo :=  Ord(Char(movestr[3])) - Ord(Char('a'));
-      Rank := StrToInt(movestr[4]) - 1;
-      Dest := 8*(7-Rank) + FileNo;
-
-      ValidDest := Board.GetCellValidMoves(Board.ToPlay, Source);
-      if GetBit(ValidDest, Dest) = false then
-        exit(false);
-
-      Piece := Board.GetPiece_asm(Source);
-      CapturedPiece := Board.GetPiece_asm(Dest);
-
-      PromotionPiece := 0;
-      if (Piece = pawn) and ((Rank = 7) or (Rank = 0)) and (Char(movestr[5]) <> ' ') then
+      if Char(s^) = ' ' then
+        inc(s)
+       else
         begin
-        if (Char(movestr[5]) = 'q') or (Char(movestr[5]) = 'Q') then
-          PromotionPiece := 5;
-        if (Char(movestr[5]) = 'r') or (Char(movestr[5]) = 'R') then
-          PromotionPiece := 4;
-        if (Char(movestr[5]) = 'b') or (Char(movestr[5]) = 'B') then
-          PromotionPiece := 3;
-        if (Char(movestr[5]) = 'n') or (Char(movestr[5]) = 'N') then
-          PromotionPiece := 2;
+        FileNo := Ord(Char(s^)) - Ord(Char('a'));
+        inc(s);
+        Rank := Ord(Char(s^)) - Ord(Char('0')) - 1;
+        inc(s);
+        Source := 8*(7-Rank) + FileNo;
+
+        FileNo := Ord(Char(s^)) - Ord(Char('a'));
+        inc(s);
+        Rank := Ord(Char(s^)) - Ord(Char('0')) - 1;
+        inc(s);
+        Dest := 8*(7-Rank) + FileNo;
+
+        Piece := Board.GetPiece_asm(Source);
+        CapturedPiece := Board.GetPiece_asm(Dest);
+
+        PromotionPiece := 0;
+        if (Piece = pawn) and ((Rank = 7) or (Rank = 0)) and (Char(s^) <> ' ') then
+          begin
+          if (Char(s^) = 'q') or (Char(Char(s^)) = 'Q') then
+            PromotionPiece := 5;
+          if (Char(s^) = 'r') or (Char(s^) = 'R') then
+            PromotionPiece := 4;
+          if (Char(s^) = 'b') or (Char(s^) = 'B') then
+            PromotionPiece := 3;
+          if (Char(s^) = 'n') or (Char(s^) = 'N') then
+            PromotionPiece := 2;
+
+          inc(s);
+          end;
+
+        if Piece = pawn then   // handle enpassant capture
+          begin
+          if (Dest mod 8 <> Source mod 8) and (CapturedPiece = 0) then
+            CapturedPiece := Pawn;
+          end;
+
+        Move := 0;
+        Move := UInt64(Source) or (UInt64(Dest) shl 6) or (UInt64(Piece) shl 12) or (UInt64(CapturedPiece) shl 16) or (UInt64(PromotionPiece) shl 20);
+
+        Move.SetHalfMoveCount(Board.HalfCount);
+        Move.SetCastleFlags(Board.MovedPieces);
+
+        if Board.Enpassant <> 0 then
+          begin
+          epCell := GetLowBit_Alt(Board.Enpassant);
+          Move.SetEnpassantCell(epCell);
+          end;
+
+        GameMoveList.AddMove(Move);
+        Board.MakeMove(Move);
+
+        result := true;
         end;
-
-      if Piece = pawn then   // handle enpassant capture
-        begin
-        if (Dest mod 8 <> Source mod 8) and (CapturedPiece = 0) then
-          CapturedPiece := Pawn;
-        end;
-
-      Move := 0;
-      Move.SetSource(Source);
-      Move.SetDest(Dest);
-      Move.SetPiece(Piece);
-      Move.SetCapturedPiece(CapturedPiece);
-      Move.SetPromotionPiece(PromotionPiece);
-
-      Move.SetHalfMoveCount(Board.HalfCount);
-      Move.SetCastleFlags(Board.MovedPieces);
-
-      if Board.Enpassant <> 0 then
-        begin
-        epCell := GetLowBit_Alt(Board.Enpassant);
-        Move.SetEnpassantCell(epCell);
-        end;
-
-      GameMoveList.AddMove(Move);
-      Board.MakeMove(Move);
-      end;
-
-    finally
-    Moves_text.Free;
-    end;
+      end
+    until (s^ = #13) or (s^ = #0);
   end;
 
 
 procedure HaltSearch(var PVS_Search : TSearch);
   begin
-  PVS_Search.StopSearch;
+  PVS_Search.Stop := true;
+
+    repeat
+    until PVS_Search.Searching = false;
   end;
 
 
@@ -709,10 +590,10 @@ procedure ShutDownSearch(var PVS_Search : TSearch);
 
 procedure DrawBoard(Board : TBoard);
   var
-    line : string;
+    line : Ansistring;
     cell, RankNo, FileNo : integer;
     piece, color, t : integer;
-    tempstr, Fen : string;
+    tempstr, Fen : Ansistring;
 
   begin
   WriteLn(output, ' ');
@@ -728,9 +609,7 @@ procedure DrawBoard(Board : TBoard);
     cell := RankNo*8 + FileNo;
     piece := Board.GetPiece_asm(cell);
     color := Board.GetColor(cell);
-    if color = none then
-      color := 0;
-    t := color * 6 + piece;
+    t := color * 7 + piece;
 
     if FileNo = 0 then
       line := ' ' + IntToStr(8 - RankNo);
@@ -743,12 +622,14 @@ procedure DrawBoard(Board : TBoard);
        4 : tempstr := 'R';
        5 : tempstr := 'Q';
        6 : tempstr := 'K';
-       7 : tempstr := 'p';
-       8 : tempstr := 'n';
-       9 : tempstr := 'b';
-      10 : tempstr := 'r';
-      11 : tempstr := 'q';
-      12 : tempstr := 'k';
+       7 : tempstr := ' ';
+       8 : tempstr := 'p';
+       9 : tempstr := 'n';
+      10 : tempstr := 'b';
+      11 : tempstr := 'r';
+      12 : tempstr := 'q';
+      13 : tempstr := 'k';
+      14 : tempstr := ' ';
       end;
 
     line := line + ' | ' + tempstr;
@@ -781,10 +662,9 @@ procedure DrawBoard(Board : TBoard);
 
 //  UCI Interface
 
-//  GUI To Engine
+//  GUI To Engine:
 
 //        uci	                                       Display engine name and author name
-//        debug	                                     Display search statistics
 //        isready	                                   Respond readyok
 //        setoption	                                 Set engine option
 //        register	                                 This engine does not require registration
@@ -801,13 +681,13 @@ procedure DrawBoard(Board : TBoard);
 //        quit	                                     Exit program
 
 
-//  Engine To GUI
+//  Engine To GUI:
 
 //        id name / author	                         Display engine name and author name
 //        uciok	                                     Ready to receive commands
 //        readyok	                                   Ready to receive position
 //        bestmove	                                 Return best move
-//        ponder	                                   Return opponents apparent best move, currently not supported
+//        ponder	                                   Return opponents apparent best move
 
 //        copyprotection	                           not implemented, Yakka is not copy-protected
 //        registration	                             not implemented, Yakka does not require registration
@@ -820,23 +700,50 @@ procedure DrawBoard(Board : TBoard);
 //             nps
 //             hashfull                              Display TT utilization
 //             time
+//             wdl                                   not yet supported
 //             pv
+
 
 //        info string                                Display information
 
-//        option name ownbook                        Use imbedded ownbook true/false
-//        option name uci_engineabout                Display engine name, author name, {and website link}
-//        option name uci_analysemode                Analysemode true : set OwnBook to false. Analysemode false = no action
 
-//        option name ponder                         Pondering currently not supported
+//  Options:
 
-//        option name nalimovpath nalimovcache       Nalimov tablebases not implemented
-//        option name uci_shredderbasespath          Shredder tablebases not implemented
-
-//        option name uci_showcurrline	             Displaying currently analyzed line not implemented
-//        option name uci_showrefutations            Displaying refutations of candidate moves not implemented
-//        option name uci_opponent                   Yakka does not adjust its play based on opponent
-//        option name uci_setpositionvalue           Setting the value of a position (for analysis) not supported
-
+//        option name UCI_EngineAbout type string default 'Yakka vX.X by Christopher Crone'
+//
+//                  >   Display engine name, author name, {and website link}
+//
+//        option name Threads type spin default 1 min 1 max 16
+//
+//                  >   Sets the number of CPU threads used for searching a position.
+//                  >   For best performance, set this equal to the number of CPU cores available.
+//
+//        option name Hash type spin default 64 min 1 max 256
+//
+//                  >   Sets the size of the hash table in MB. It is recommended to set Hash after setting Threads.
+//
+//        option name Clear Hash type button
+//
+//                  >   Clears the hash table.
+//
+//        option name Ownbook type check default false
+//
+//                  >   Use imbedded opening book
+//
+//        option name Ponder type check default false
+//
+//                  >   This means that the engine is able to ponder
+//                  >   When set to true, this changes the time management algorithm
+//
+//        option name MultiPV type spin default 1 min 1 max 32
+//
+//                  >   Output the N best lines (PVs) when searching. Leave at 1 for the best performance.
+//                  >   ToDo, currrently not supported
+//
+//        option name UCI_ShowWDL type check default false
+//
+//                  >   Include wdl <win_prob> <draw_prob> <loss_prob> in the info line,
+//                  >   Probabilities are in integer per thousand and always add up to 1000
+//                  >   ToDo, currrently not supported
 
 end.

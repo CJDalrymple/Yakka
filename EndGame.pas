@@ -339,17 +339,18 @@ function Evaluate_EasyMate(const Board : TBoard; Eval : integer) : integer;
 
   const
     EdgeBonus : array[0..63] of integer =
-           (6, 5, 4, 3, 3, 4, 5, 6,
-            5, 4, 3, 2, 2, 3, 4, 5,
-            4, 3, 2, 1, 1, 2, 3, 4,
-            3, 2, 1, 0, 0, 1, 2, 3,
-            3, 2, 1, 0, 0, 1, 2, 3,
-            4, 3, 2, 1, 1, 2, 3, 4,
-            5, 4, 3, 2, 2, 3, 4, 5,
-            6, 5, 4, 3, 3, 4, 5, 6);
+           (36, 25, 16,  9,  9, 16, 25, 36,
+            25, 16,  9,  4,  4,  9, 16, 25,
+            16,  9,  4,  1,  1,  4,  9, 16,
+             9,  4,  1,  0,  0,  1,  4,  9,
+             9,  4,  1,  0,  0,  1,  4,  9,
+            16,  9,  4,  1,  1,  4,  9, 16,
+            25, 16,  9,  4,  4,  9, 16, 25,
+            36, 25, 16,  9,  9, 16, 25, 36);
 
   var
-    BlackKingCell, WhiteKingCell, DefeatedKingCell, index, material : integer;
+    BlackKingCell, WhiteKingCell, DefeatedKingCell, index, material, bonus : integer;
+    WhiteWinning : boolean;
 
  // Mate with K vs kxx.
  // Returns score with bonus from white perspective
@@ -358,20 +359,21 @@ function Evaluate_EasyMate(const Board : TBoard; Eval : integer) : integer;
  // and keep white king close to black king.
 
   begin
+
   BlackKingCell :=  GetLowBit_Alt(Board.Kings and Board.BlackPegs);
   WhiteKingCell :=  GetLowBit_Alt(Board.Kings and Board.WhitePegs);
 
-  if bitcount(Board.WhitePegs) > 1 then         // white winning
-    DefeatedKingCell := BlackKingCell
-   else
-    DefeatedKingCell := WhiteKingCell;
+  WhiteWinning := (bitcount(Board.WhitePegs) > 1);
 
- { if sign(Eval) * (1 - 2*Board.ToPlay) > 0 then
-    bonus := EdgeBonus[BlackKingCell]
+  if WhiteWinning then         // white winning
+    bonus := 8 * (EdgeBonus[BlackKingCell] - Distance(WhiteKingCell, BlackKingCell) * Distance(WhiteKingCell, BlackKingCell))
    else
-    bonus := EdgeBonus[WhiteKingCell];  }
+    bonus := 8 * (EdgeBonus[WHiteKingCell] - Distance(WhiteKingCell, BlackKingCell) * Distance(WhiteKingCell, BlackKingCell));
 
-  result := sign(Eval) * (1500  +  5 * EdgeBonus[DefeatedKingCell] +  2 * (14 - ManhattanDistance(WhiteKingCell, BlackKingCell)));
+  if ((board.ToPlay = White) and WhiteWinning) or ((board.ToPlay = black) and not WhiteWinning) then
+    result := Eval + bonus
+   else
+    result := Eval - bonus;
   end;
 
 
@@ -466,27 +468,6 @@ procedure InitializeEndGameLookup;
   index := knight * 11 + knight;
   EndGameLookup[index] := Evaluate_Draw;
 
-  // KN v kr   : Mostly draw
-  //           : white win 0.0%  draw 71.8%  black win 28.2%   drawish
-  index := knight * 11 + (rook + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-
-  // KR v kn   : Mostly draw
-  //           : white win 28.2%  draw 71.8%  black win 0.0%   drawish
-  index := rook * 11 + (knight + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-
-  // KB v kr   : Mostly draw
-  //           : white win 0.0%  draw 81.6%  black win 18.4%   drawish
-  index := bishop * 11 + (rook + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-
-
-  // KR v kb    : Mostly draw
-  //            : white win 18.4%  draw 81.6%  black win 0.0%   drawish
-  index := rook * 11 + (bishop + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-
   // K v kbb   : Simple Mate by Black
   index := (bishop + 5) * 11 + (bishop + 5);
   EndGameLookup[index] := Evaluate_EasyMate;
@@ -531,27 +512,6 @@ procedure InitializeEndGameLookup;
   index := bishop * 11 + knight;
   EndGameLookup[index] := Evaluate_BN;
 
-  // KB v kp   : drawish : don't want to exchange into this position
-  //           : white win  0.0%  draw 85.1%  black win 14.6%   drawish
-  index := bishop * 11 + (pawn + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-
-  // KP v kb   : drawish : don't want to exchange into this position
-  //           : white win  14.6%  draw 85.1%  black win 0.0%   drawish
-  index := pawn * 11 + (bishop + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-
-  // KN v kp  : drawish : don't want to exchange into this position
-  //          : white win  0.0%  draw 77.0%  black win 23.0%   drawish
-  index := knight * 11 + (pawn + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-
-  // KP v kn  : drawish : don't want to exchange into this position
-  //          : white win 23.0%  draw 77.0%  black win 0.0%   drawish
-  index := pawn * 11 + (knight + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-
-
   // 5-man eval
 
   // KBB v kb  : Draw
@@ -572,20 +532,6 @@ procedure InitializeEndGameLookup;
   index := rook * 121 + (bishop + 5) * 11 + (bishop + 5);
   EndGameLookup[index] := Evaluate_Draw;
 
-  // KBN v kr   : drawish : don't want to exchange into this position
-  //            : white win 13.8%  draw 84.1%  black win 2.0%
-  index := bishop * 121 + knight * 11 + (rook + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-  index := knight * 121 + bishop * 11 + (rook + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-
-  // KR v kbn   : drawish : don't want to exchange into this position
-  //            : white win 2.0%  draw 84.1%  black win 13.8%
-  index := rook * 121 + (bishop + 5) * 11 + (knight + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-  index := rook * 121 + (knight + 5) * 11 + (bishop + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-
   // KN v knn   : Draw
   index := knight * 121 + (knight + 5) * 11 + (knight + 5);
   EndGameLookup[index] := Evaluate_Draw;
@@ -602,78 +548,6 @@ procedure InitializeEndGameLookup;
   index := knight * 121 + knight * 11 + (bishop + 5);
   EndGameLookup[index] := Evaluate_Draw;
 
-  // KR v knn  : Draw
-  //           : white win 3.2%  draw 96.8%  black win 0.0%
-  index := rook * 121 + (knight + 5) * 11 + (knight + 5);
-  EndGameLookup[index] := Evaluate_Draw;
-
-  // KNN v kr  : Draw
-  //           : white win 0.0%  draw 96.8%  black win 3.2%
-  index := knight * 121 + knight * 11 + (rook + 5);
-  EndGameLookup[index] := Evaluate_Draw;
-
-
-  // TODO expand this with dedicated evaluation
-
-  // KR v krp  : winable but dificult
-  //           : white win 10.4%  draw 43.9%  black win 45.8%
-  index := rook * 121 + (rook + 5) * 11 + (pawn + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-  index := rook * 121 + (pawn + 5) * 11 + (rook + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-
-  // KRP v kr  : winable but dificult
-  //           : white win 45.8%  draw 43.9%  black win 10.4%
-  index := rook * 121 + pawn * 11 + (rook + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-  index := pawn * 121 + rook * 11 + (rook + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-
-  // KB v kbp   : drawish : don't want to exchange into this position
-  //            : white win  0.0%  draw 73.0%  black win 27.0%   drawish
-  index := bishop * 121 + (bishop + 5) * 11 + (pawn + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-  index := bishop * 121 + (pawn + 5) * 11 + (bishop + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-
-
-  // KBP v kb   : drawish : don't want to exchange into this position
-  //            : white win 27.0%  draw 73.0%  black win 0.0%   drawish
-  index := bishop * 121 + pawn * 11 + (bishop + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-  index := pawn * 121 + bishop * 11 + (bishop + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-
-  // KPP v kb   : drawish : don't want to exchange into this position
-  //            : white win 40.1%  draw 59.9%  black win 0.0%   drawish
-  index := pawn * 121 + pawn * 11 + (bishop + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-
-  // KB v kpp   : drawish : don't want to exchange into this position
-  //            : white win 0.0%  draw 59.9%  black win 40.1%  drawish
-  index := bishop * 121 + (pawn + 5) * 11 + (pawn + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-
-  // KPP v kn  : drawish : don't want to exchange into this position
-  //           : white win 51.3%  draw 48.7%  black win 0.0%   drawish
-  index := pawn * 121 + pawn * 11 + (knight + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-
-  // KN v kpp  : drawish : don't want to exchange into this position
-  //           : white win 0.0%  draw 48.7%  black win 51.3%   drawish
-  index := knight * 121 + (pawn + 5) * 11 + (pawn + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-
-
-  // KP v knn  : drawish : don't want to exchange into this position
-  //           : white win 7.9%  draw 70.3%  black win 14.6%   drawish
-  index := pawn * 121 + (knight + 5) * 11 + (knight + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
-
-  // KNN v kp  : drawish : don't want to exchange into this position
-  //           : white win 14.6%  draw 70.3%  black win 7.9%   drawish
-  index := knight * 121 + knight * 11 + (pawn + 5);
-  EndGameLookup[index] := Evaluate_MostlyDraw;
   end;
 
 
