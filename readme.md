@@ -112,7 +112,7 @@ To build the engine from source, use Delphi 12.0 Alexandra or later version.
 * Yakka v1.1 - 15th September 2024   Bug fixes and improved playing strength
 * Yakka v1.2 -  8th February 2025    Changed evaluation from HCE to NNUE 
 * Yakka v1.3 - 10th August 2025      Bug fixes, implemented pondering and improved NNUE implementation
-* Yakka v1.4 - 12th November 2025    Bug fixes and improved NNUE implementation
+* Yakka v1.4 - 11th November 2025    Bug fixes and improved NNUE implementation
 
 ## Help & Support
 
