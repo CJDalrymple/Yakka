@@ -45,15 +45,15 @@ To build the engine from source, use Delphi 12.0 Alexandra or later version.
 			  
 	  - File Name : 'NNUE 768x256_x2 31222017c gen7 early.net'
 	  - Type : RCDATA
-	  - Identifier : \_768x256\_x2\_gen7\_early  
+	  - Identifier : \_768x256\_x2\_gen7\_early
 			  
 	  - File Name : 'NNUE 768x256_x2 85639857c gen7 mid.net'
 	  - Type : RCDATA
-	  - Identifier : \_768x256\_x2\_gen7\_mid  
+	  - Identifier : \_768x256\_x2\_gen7\_mid
 			  
 	  - File Name : 'NNUE 768x256_x2 169081011c gen7 late.net'
 	  - Type : RCDATA
-	  - Identifier : \_768x256\_x2\_gen7\_late	  
+	  - Identifier : \_768x256\_x2\_gen7\_late
 		
   - Build 'Yakka'
 
@@ -130,6 +130,7 @@ In no particular order:
   - Much experimenting / tweaking
   - MultiPV
   - Endgame Tablebases
+
 
 
 
