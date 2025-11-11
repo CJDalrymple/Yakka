@@ -54,7 +54,7 @@ To build the engine from source, use Delphi 12.0 Alexandra or later version.
 	  - File Name : 'NNUE 768x256_x2 169081011c gen7 late.net'
 	  - Type : RCDATA
 	  - Identifier : \_768x256\_x2\_gen7\_late  
-	  --
+	  
   - Build 'Yakka'
 
 ## Functional Details
