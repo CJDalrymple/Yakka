@@ -181,13 +181,13 @@ function Evaluate_kp_K(const Board : TBoard; Eval : integer) : integer;
     PromotionCell := PawnCell and $7;
 
     if min(5, Distance(PawnCell, PromotionCell)) < Distance(OpponentKingCell, PromotionCell) - Board.ToPlay then   // win for white
-      exit(max(Eval, 850));
+      exit(Eval);
 
     if distance(PawnCell, OpponentKingCell) < Distance(PawnCell, KingCell) - Board.ToPlay then   // draw : pawn can be captured
       exit(Eval div 64);
 
     if  KingOnKeySquare(Board, white, PawnCell) then             // win for white
-      exit(max(Eval, 850));
+      exit(Eval);
     end
    else
     begin      // black winning
@@ -196,13 +196,13 @@ function Evaluate_kp_K(const Board : TBoard; Eval : integer) : integer;
     PromotionCell := 56 + (PawnCell and $7);
 
     if min(5, Distance(PawnCell, PromotionCell)) < Distance(OpponentKingCell, PromotionCell) - ( 1- Board.ToPlay) then   // win for black
-      exit(min(-850, Eval));
+      exit(Eval);
 
     if distance(PawnCell, OpponentKingCell) < Distance(PawnCell, KingCell) - (1 - Board.ToPlay) then    // draw : pawn can be captured
       exit(Eval div 64);
 
     if  KingOnKeySquare(Board, black, PawnCell) then           // win for black
-      exit(min(-850, Eval));
+      exit(Eval);
     end;
 
   result := Eval div 64;       // draw

@@ -28,7 +28,7 @@ Alternatively Yakka can be run as a command line console using UCI commands.
 
 ## Download
 
-You can download the precompiled Windows executable : 'Yakka v1.3 x64.exe'
+You can download the precompiled Windows executable : 'Yakka v1.4 x64.exe'
 This will run on x86-64 CPU's which support the BMI2 and AVX2 instruction sets.  
 
 ## Compilation
@@ -43,9 +43,17 @@ To build the engine from source, use Delphi 12.0 Alexandra or later version.
 	  - Type : RCDATA
 	  - Identifier : Open_Book  
 			  
-	  - File Name : 'NNUE 768x128_x2 151190269c +70+ gen5.net'
+	  - File Name : 'NNUE 768x256_x2 31222017c gen7 early.net'
 	  - Type : RCDATA
-	  - Identifier : \_768x128\_x2\_gen5
+	  - Identifier : \_768x256\_x2\_gen7\_early  
+			  
+	  - File Name : 'NNUE 768x256_x2 85639857c gen7 mid.net'
+	  - Type : RCDATA
+	  - Identifier : \_768x256\_x2\_gen7\_mid  
+			  
+	  - File Name : 'NNUE 768x256_x2 169081011c gen7 late.net'
+	  - Type : RCDATA
+	  - Identifier : \_768x256\_x2\_gen7\_late	  
 		
   - Build 'Yakka'
 
@@ -90,7 +98,7 @@ To build the engine from source, use Delphi 12.0 Alexandra or later version.
 
 * Evaluation
 
-  - NNUE net 768x2>128>1 (requires AVX2)
+  - NNUE net 768>256x2>1 (requires AVX2)
 
 * Opening Book
 
@@ -104,6 +112,7 @@ To build the engine from source, use Delphi 12.0 Alexandra or later version.
 * Yakka v1.1 - 15th September 2024   Bug fixes and improved playing strength
 * Yakka v1.2 -  8th February 2025    Changed evaluation from HCE to NNUE 
 * Yakka v1.3 - 10th August 2025      Bug fixes, implemented pondering and improved NNUE implementation
+* Yakka v1.4 - 12th November 2025    Bug fixes and improved NNUE implementation
 
 ## Help & Support
 

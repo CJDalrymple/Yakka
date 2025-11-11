@@ -54,6 +54,9 @@ const
   whitesqr  = UInt64($AA55AA55AA55AA55);
   blacksqr = UInt64($55AA55AA55AA55AA);
 
+  Left_Side   = UInt64($0F0F0F0F0F0F0F0F);   //   a..d
+  Right_Side  = UInt64($F0F0F0F0F0F0F0F0);   //   e..h
+
   pieceNames : array[0..king] of string = ('', 'Pawn', 'Knight', 'Bishop', 'Rook', 'Queen', 'King');
   colourNamesShort : array[White..Black] of string = ('W', 'B');
   colourNamesLong : array[White..Black] of string = ('White', 'Black');
@@ -103,6 +106,9 @@ type
   //   bit  44       : LMR flag used during search
   //   bits 48..63   : 16 bits available for Move value or other uses
 
+
+type
+  TBoardKind = (earlygame, midgame, midgame_Kk, midgame_Kq, midgame_Qk, midgame_Qq, lategame, Allgame);
 
 type
   TMoveView = record
@@ -296,6 +302,9 @@ type
 
   function GetPiece(CellIndex : integer) : integer;
   function GetPiece_asm(CellIndex : integer) : integer;
+
+  function GetMixedness : integer;
+  function Clan : TBoardKind;
 
   procedure FlipColor;
   end;
@@ -638,6 +647,78 @@ function TBoard.GetPiece_asm(CellIndex : integer) : integer;
   xor eax, eax
 
   @exit:
+  end;
+
+
+function TBoard.GetMixedness : integer;
+  // from scalachess/core/src/scala/divider.scala
+
+  var x, y : integer;
+      region : UInt64;
+      blackcount, whitecount : integer;
+
+  begin
+  result := 0;
+  for y := 0 to 6 do
+    for x := 0 to 6 do
+      begin
+      region := UInt64($303) shl (x + 8*(6-y));
+      whitecount := bitcount(region and WhitePegs);
+      blackcount := bitcount(region and BlackPegs);
+
+      if whitecount = 0 then
+        begin
+          case blackcount of
+          1 : result := result + 1 + y;
+          2 : if y < 6 then result := result + 2 + (6-y);
+          3, 4 : result := result + 3 + (7-y);
+          end;
+        end
+       else if whitecount = 1 then
+        begin
+          case blackcount of
+          0 : result := result + 1 + (8-y);
+          1 : result := result + 5 + abs(4-y);
+          2 : result := result + 4 + (7-y);
+          3 : result := result + 5 + (7-y);
+          end
+        end
+       else if whitecount = 2 then
+        begin
+          case blackcount of
+          0 : if y > 2 then result := result + 2 + (y-2);
+          1 : result := result + 4 + (y-1);
+          2 : result := result + 7;
+          end
+        end
+       else if whitecount = 3 then
+        begin
+          case blackcount of
+          0 : if y > 1 then result := result + 3 + (y-1);
+          1 : result := result + 5 + (y-1);
+          end
+        end
+       else if whitecount = 4 then
+        if y > 1 then result := result + 3 + (y-1);
+      end;
+  end;
+
+
+function TBoard.Clan : TBoardKind;
+  var
+    index : integer;
+
+  begin
+  if bitcount(Queens or Rooks or Bishops or Knights) < 7 then
+    exit(lategame);
+
+  if (bitcount(Queens or Rooks or Bishops or Knights) < 11) or
+     (bitcount(BlackPegs and UInt64($00000000000000FF)) < 4) or
+     (bitcount(WhitePegs and UInt64($FF00000000000000)) < 4) or
+     (GetMixedness > 150) then
+       exit(midgame);
+
+  result := earlygame;
   end;
 
 

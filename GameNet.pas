@@ -30,11 +30,10 @@ uses
   Winapi.Windows, System.Classes, System.SysUtils, Math, Common, GameDef, EndGame;
 
 type
-  TNetArchType = (nt_unknown, _768x128_v1, _768x128_x2, _1536x128_v1);
+  TNetArchType = (nt_unknown, _768x128_x2, _768x256_x2);
 
 const
-  NetType = _768x128_x2;
-
+  NetType = _768x256_x2;
 
 type
   TEvalRec = record
@@ -59,21 +58,20 @@ type
 
 
 type
-  TAccumulator_128 = record
-    values : array[0..255] of int16;
+  TAccumulator_256 = record
+    values : array[0..511] of int16;
 
-    procedure LoadBias_asm(sourceW, sourceB : PSmallInt);
-    procedure Load_asm;
-    procedure Save_asm;
-    procedure Add_asm(sourceW, sourceB : PSmallInt);
-    procedure Sub_asm(sourceW, sourceB : PSmallInt);
+    procedure LoadBias_asm(source : PSmallInt);
+    procedure Load_asm(colour : Integer);
+    procedure Save_asm(colour : Integer);
+    procedure Add_asm(source : PSmallInt);
+    procedure Sub_asm(source : PSmallInt);
     procedure Zero;
     function GetEval_asm(weights : PSmallInt; colour : integer) : int16;
     end;
 
-
 type
-  TAccumulator = TAccumulator_128;
+  TAccumulator = TAccumulator_256;
 
 
 type
@@ -106,171 +104,212 @@ function ScoreFromAccumulator(const Accumulator : TAccumulator; const Board : TB
 procedure Update_Accumulator(const SourceAccumulator : TAccumulator; var DestAccumulator : TAccumulator; Move : TMove; const Board : TBoard);
 procedure Refresh_Accumulator(var Accummulator : TAccumulator; const Board : TBoard);
 
+var
+  EarlyNet : TGameNet;
+  MidNet : TGameNet;
+  LateNet : TGameNet;
+
+  Game_Net : ^TGameNet;
+
+
 implementation
 
 uses
   Search;
 
 var
-  Game_Net : TGameNet;
   EvalHashTable : T_EvalHash_Table;
 
 
-// ==================  TAccumulator_128  ===========================================
+// ==================  TAccumulator_256  ===========================================
 
-procedure TAccumulator_128.LoadBias_asm(sourceW, sourceB : PSmallInt);
+
+procedure TAccumulator_256.LoadBias_asm(source : PSmallInt);
   asm
   .NOFRAME
+  mov r8, rdx
+  add r8, 256
 
-	vmovdqu ymm0, [rdx]       //  Load W0
-  vmovdqu ymm1, [rdx+32]    //  Load W1
-  vmovdqu ymm2, [rdx+64]    //  Load W2
-  vmovdqu ymm3, [rdx+96]    //  Load W3
-  vmovdqu ymm4, [rdx+128]   //  Load W4
-  vmovdqu ymm5, [rdx+160]   //  Load W5
-  vmovdqu ymm6, [rdx+192]   //  Load W6
-  vmovdqu ymm7, [rdx+224]   //  Load W7
+	vmovdqu ymm0, [rdx]       //  Load A0
+  vmovdqu ymm8, [r8]        //  Load A8
 
-	vmovdqu ymm8, [r8]        //  Load B0
-  vmovdqu ymm9, [r8+32]     //  Load B1
-	vmovdqu ymm10, [r8+64]    //  Load B2
-  vmovdqu ymm11, [r8+96]    //  Load B3
-  vmovdqu ymm12, [r8+128]   //  Load B4
-  vmovdqu ymm13, [r8+160]   //  Load B5
-  vmovdqu ymm14, [r8+192]   //  Load B6
-  vmovdqu ymm15, [r8+224]   //  Load B7
+  vmovdqu ymm1, [rdx+32]    //  Load A1
+  vmovdqu ymm9, [r8+32]     //  Load A9
+
+  vmovdqu ymm2, [rdx+64]    //  Load A2
+	vmovdqu ymm10, [r8+64]    //  Load A10
+
+  vmovdqu ymm3, [rdx+96]    //  Load A3
+  vmovdqu ymm11, [r8+96]    //  Load A11
+
+  vmovdqu ymm4, [rdx+128]   //  Load A4
+  vmovdqu ymm12, [r8+128]   //  Load A12
+
+  vmovdqu ymm5, [rdx+160]   //  Load A5
+  vmovdqu ymm13, [r8+160]   //  Load A13
+
+  vmovdqu ymm6, [rdx+192]   //  Load A6
+  vmovdqu ymm14, [r8+192]   //  Load A14
+
+  vmovdqu ymm7, [rdx+224]   //  Load A7
+  vmovdqu ymm15, [r8+224]   //  Load A15
   end;
 
 
-procedure TAccumulator_128.Load_asm;
+procedure TAccumulator_256.Load_asm(colour : integer);
   asm
   .NOFRAME
+  imul rdx, 512             // if colour = black (1) then r8 = 512, else if white (0) then r8 = 0
+  add rcx, rdx
+
   mov r8, rcx
   add r8, 256
 
-	vmovdqu ymm0, [rcx]       //  Load W0
-  vmovdqu ymm1, [rcx+32]    //  Load W1
-	vmovdqu ymm2, [rcx+64]    //  Load W2
-  vmovdqu ymm3, [rcx+96]    //  Load W3
-	vmovdqu ymm4, [rcx+128]   //  Load W4
-	vmovdqu ymm5, [rcx+160]   //  Load W5
-	vmovdqu ymm6, [rcx+192]   //  Load W6
-	vmovdqu ymm7, [rcx+224]   //  Load W7
+	vmovdqu ymm0, [rcx]       //  Load A0
+  vmovdqu ymm8, [r8]        //  Load A8
 
-  vmovdqu ymm8, [r8]        //  Load B0
-	vmovdqu ymm9, [r8+32]     //  Load B1
-  vmovdqu ymm10, [r8+64]    //  Load B2
-	vmovdqu ymm11, [r8+96]    //  Load B3
-	vmovdqu ymm12, [r8+128]   //  Load B4
-	vmovdqu ymm13, [r8+160]   //  Load B5
-	vmovdqu ymm14, [r8+192]   //  Load B6
-	vmovdqu ymm15, [r8+224]   //  Load B7
+  vmovdqu ymm1, [rcx+32]    //  Load A1
+  vmovdqu ymm9, [r8+32]     //  Load A9
+
+	vmovdqu ymm2, [rcx+64]    //  Load A2
+  vmovdqu ymm10, [r8+64]    //  Load A10
+
+  vmovdqu ymm3, [rcx+96]    //  Load A3
+	vmovdqu ymm11, [r8+96]    //  Load A11
+
+	vmovdqu ymm4, [rcx+128]   //  Load A4
+	vmovdqu ymm12, [r8+128]   //  Load A12
+
+	vmovdqu ymm5, [rcx+160]   //  Load A5
+	vmovdqu ymm13, [r8+160]   //  Load A13
+
+	vmovdqu ymm6, [rcx+192]   //  Load A6
+	vmovdqu ymm14, [r8+192]   //  Load A14
+
+	vmovdqu ymm7, [rcx+224]   //  Load AW7
+	vmovdqu ymm15, [r8+224]   //  Load A15
   end;
 
 
-procedure TAccumulator_128.Save_asm;
+procedure TAccumulator_256.Save_asm(colour : integer);
   asm
   .NOFRAME
+  imul rdx, 512             // if colour = black (1) then r8 = 512, else if white (0) then r8 = 0
+  add rcx, rdx
+
   mov r8, rcx
   add r8, 256
 
 	vmovdqu [rcx], ymm0        //  Save A0
-  vmovdqu [rcx+32], ymm1     //  Save A1
-	vmovdqu [rcx+64], ymm2     //  Save A2
-  vmovdqu [rcx+96], ymm3     //  Save A3
-	vmovdqu [rcx+128], ymm4    //  Save A4
-	vmovdqu [rcx+160], ymm5    //  Save A5
-	vmovdqu [rcx+192], ymm6    //  Save A6
-	vmovdqu [rcx+224], ymm7    //  Save A7
+  vmovdqu [r8], ymm8         //  Save A8
 
-  vmovdqu [r8], ymm8        //  Save B0
-	vmovdqu [r8+32], ymm9     //  Save B1
-  vmovdqu [r8+64], ymm10    //  Save B2
-	vmovdqu [r8+96], ymm11    //  Save B3
-  vmovdqu [r8+128], ymm12   //  Save B4
-  vmovdqu [r8+160], ymm13   //  Save B5
-  vmovdqu [r8+192], ymm14   //  Save B6
-  vmovdqu [r8+224], ymm15   //  Save B7
+  vmovdqu [rcx+32], ymm1     //  Save A1
+	vmovdqu [r8+32], ymm9      //  Save A9
+
+	vmovdqu [rcx+64], ymm2     //  Save A2
+  vmovdqu [r8+64], ymm10     //  Save A10
+
+  vmovdqu [rcx+96], ymm3     //  Save A3
+	vmovdqu [r8+96], ymm11     //  Save A11
+
+	vmovdqu [rcx+128], ymm4    //  Save A4
+  vmovdqu [r8+128], ymm12    //  Save A12
+
+	vmovdqu [rcx+160], ymm5    //  Save A5
+  vmovdqu [r8+160], ymm13    //  Save A13
+
+	vmovdqu [rcx+192], ymm6    //  Save A6
+  vmovdqu [r8+192], ymm14    //  Save A14
+
+	vmovdqu [rcx+224], ymm7    //  Save A7
+  vmovdqu [r8+224], ymm15    //  Save A15
+
   vzeroall
   end;
 
 
-procedure TAccumulator_128.Add_asm(sourceW, sourceB : PSmallInt);
+procedure TAccumulator_256.Add_asm(source : PSmallInt);
   asm
   .NOFRAME
+  mov r8, rdx
+  add r8, 256
+
 	vpaddsw ymm0, ymm0,   [rdx]       //  Add W0
-	vpaddsw ymm8, ymm8,   [r8]        //  Add B0
+	vpaddsw ymm8, ymm8,   [r8]        //  Add W8
 	vpaddsw ymm1, ymm1,   [rdx+32]    //  Add W1
-	vpaddsw ymm9, ymm9,   [r8+32]     //  Add B1
+	vpaddsw ymm9, ymm9,   [r8+32]     //  Add W9
 	vpaddsw ymm2, ymm2,   [rdx+64]    //  Add W2
-	vpaddsw ymm10, ymm10, [r8+64]     //  Add B2
+	vpaddsw ymm10, ymm10, [r8+64]     //  Add W10
 	vpaddsw ymm3, ymm3,   [rdx+96]    //  Add W3
-	vpaddsw ymm11, ymm11, [r8+96]     //  Add B3
+	vpaddsw ymm11, ymm11, [r8+96]     //  Add W11
 	vpaddsw ymm4, ymm4,   [rdx+128]   //  Add W4
-	vpaddsw ymm12, ymm12, [r8+128]    //  Add B4
+	vpaddsw ymm12, ymm12, [r8+128]    //  Add W12
 	vpaddsw ymm5, ymm5,   [rdx+160]   //  Add W5
-	vpaddsw ymm13, ymm13, [r8+160]    //  Add B5
+	vpaddsw ymm13, ymm13, [r8+160]    //  Add W13
 	vpaddsw ymm6, ymm6,   [rdx+192]   //  Add W6
-	vpaddsw ymm14, ymm14, [r8+192]    //  Add B6
+	vpaddsw ymm14, ymm14, [r8+192]    //  Add W14
 	vpaddsw ymm7, ymm7,   [rdx+224]   //  Add W7
-	vpaddsw ymm15, ymm15, [r8+224]    //  Add B7
+	vpaddsw ymm15, ymm15, [r8+224]    //  Add W15
   end;
 
 
-procedure TAccumulator_128.Sub_asm(sourceW, sourceB : PSmallInt);
+procedure TAccumulator_256.Sub_asm(source : PSmallInt);
   asm
+  .NOFRAME
+  mov r8, rdx
+  add r8, 256
+
 	vpsubsw ymm0, ymm0,   [rdx]       //  Sub W0
-	vpsubsw ymm8, ymm8,   [r8]        //  Sub B0
+	vpsubsw ymm8, ymm8,   [r8]        //  Sub W8
 	vpsubsw ymm1, ymm1,   [rdx+32]    //  Sub W1
-	vpsubsw ymm9, ymm9,   [r8+32]     //  Sub B1
+	vpsubsw ymm9, ymm9,   [r8+32]     //  Sub W9
 	vpsubsw ymm2, ymm2,   [rdx+64]    //  Sub W2
-	vpsubsw ymm10, ymm10, [r8+64]     //  Sub B2
+	vpsubsw ymm10, ymm10, [r8+64]     //  Sub W10
 	vpsubsw ymm3, ymm3,   [rdx+96]    //  Sub W3
-	vpsubsw ymm11, ymm11, [r8+96]     //  Sub B3
+	vpsubsw ymm11, ymm11, [r8+96]     //  Sub W11
 	vpsubsw ymm4, ymm4,   [rdx+128]   //  Sub W4
-	vpsubsw ymm12, ymm12, [r8+128]    //  Sub B4
+	vpsubsw ymm12, ymm12, [r8+128]    //  Sub W12
 	vpsubsw ymm5, ymm5,   [rdx+160]   //  Sub W5
-	vpsubsw ymm13, ymm13, [r8+160]    //  Sub B5
+	vpsubsw ymm13, ymm13, [r8+160]    //  Sub W13
 	vpsubsw ymm6, ymm6,   [rdx+192]   //  Sub W6
-	vpsubsw ymm14, ymm14, [r8+192]    //  Sub B6
+	vpsubsw ymm14, ymm14, [r8+192]    //  Sub W14
 	vpsubsw ymm7, ymm7,   [rdx+224]   //  Sub W7
-	vpsubsw ymm15, ymm15, [r8+224]    //  Sub B7
+	vpsubsw ymm15, ymm15, [r8+224]    //  Sub W15
   end;
 
 
-procedure TAccumulator_128.Zero;
+procedure TAccumulator_256.Zero;
   asm
   vzeroall
   end;
 
 
-function TAccumulator_128.GetEval_asm(weights : PSmallInt; colour : integer) : int16;
+function TAccumulator_256.GetEval_asm(weights : PSmallInt; colour : integer) : int16;
   asm
   test r8, r8
   JNZ @BTP
 
   @WTP:
   mov r9, rcx
-  add r9, 256
+  add r9, 512
   mov r10, rdx
-  add r10, 256
+  add r10, 512
   JMP @start
 
   @BTP:
   mov r9, rcx
-  add rcx, 256
+  add rcx, 512
   mov r10, rdx
-  add r10, 256
+  add r10, 512
 
   @start:
-  mov r8, 120
-  vzeroall                           // zero the accummulator
+  mov r8, 248
+  vzeroall                               // zero the accummulator
 
   @loop1:
 
   vpmovsxwd ymm1, [rcx+r8*2]             //  mov 8 int16 values B into ymm1 and sign extend to int32
   vpmovsxwd ymm2, [rdx+r8*2]             //  mov 8 int16 values C into ymm2 and sign extend to int32
-
   vpmaxsw ymm1, ymm3, ymm1               //  perform ReLU  i.e. if B < 0 then B = 0, 8 int32 at a time
 
   vpmovsxwd ymm5, [r9+r8*2]              //  mov 8 int16 values B into ymm5 and sign extend to int32
@@ -305,6 +344,7 @@ function TAccumulator_128.GetEval_asm(weights : PSmallInt; colour : integer) : i
 
   vzeroall
   end;
+
 
 
 // ================= Eval Hash ==================================================
@@ -408,15 +448,14 @@ procedure TGameNet.RefreshAccumulator(var Accumulator : TAccumulator; const Boar
     Cell : integer;
 
   begin
-  Accumulator.LoadBias_asm(@Bias[0], @Bias[0]);
+  Accumulator.LoadBias_asm(@Bias[0]);
 
   Pegs := Board.WhitePegs and Board.Pawns;
   while Pegs <> 0 do
     begin
     Cell := PopLowBit_Alt(Pegs);
     index_W := (              (pawn-1) * 64 + Cell) * OutputLayerSize;
-    index_B := (Black * 384 + (pawn-1) * 64 + (Cell xor 56)) * OutputLayerSize;
-    Accumulator.Add_asm(@Weights[index_W], @Weights[index_B]);
+    Accumulator.Add_asm(@Weights[index_W]);
     end;
 
   Pegs := Board.WhitePegs and Board.Knights;
@@ -424,8 +463,7 @@ procedure TGameNet.RefreshAccumulator(var Accumulator : TAccumulator; const Boar
     begin
     Cell := PopLowBit_Alt(Pegs);
     index_W := (              (knight-1) * 64 + Cell) * OutputLayerSize;
-    index_B := (Black * 384 + (knight-1) * 64 + (Cell xor 56)) * OutputLayerSize;
-    Accumulator.Add_asm(@Weights[index_W], @Weights[index_B]);
+    Accumulator.Add_asm(@Weights[index_W]);
     end;
 
   Pegs := Board.WhitePegs and Board.Bishops;
@@ -433,8 +471,7 @@ procedure TGameNet.RefreshAccumulator(var Accumulator : TAccumulator; const Boar
     begin
     Cell := PopLowBit_Alt(Pegs);
     index_W := (              (bishop-1) * 64 + Cell) * OutputLayerSize;
-    index_B := (Black * 384 + (bishop-1) * 64 + (Cell xor 56)) * OutputLayerSize;
-    Accumulator.Add_asm(@Weights[index_W], @Weights[index_B]);
+    Accumulator.Add_asm(@Weights[index_W]);
     end;
 
   Pegs := Board.WhitePegs and Board.Rooks;
@@ -442,8 +479,7 @@ procedure TGameNet.RefreshAccumulator(var Accumulator : TAccumulator; const Boar
     begin
     Cell := PopLowBit_Alt(Pegs);
     index_W := (              (rook-1) * 64 + Cell) * OutputLayerSize;
-    index_B := (Black * 384 + (rook-1) * 64 + (Cell xor 56)) * OutputLayerSize;
-    Accumulator.Add_asm(@Weights[index_W], @Weights[index_B]);
+    Accumulator.Add_asm(@Weights[index_W]);
     end;
 
   Pegs := Board.WhitePegs and Board.Queens;
@@ -451,8 +487,7 @@ procedure TGameNet.RefreshAccumulator(var Accumulator : TAccumulator; const Boar
     begin
     Cell := PopLowBit_Alt(Pegs);
     index_W := (              (queen-1) * 64 + Cell) * OutputLayerSize;
-    index_B := (Black * 384 + (queen-1) * 64 + (Cell xor 56)) * OutputLayerSize;
-    Accumulator.Add_asm(@Weights[index_W], @Weights[index_B]);
+    Accumulator.Add_asm(@Weights[index_W]);
     end;
 
   Pegs := Board.WhitePegs and Board.Kings;
@@ -460,8 +495,7 @@ procedure TGameNet.RefreshAccumulator(var Accumulator : TAccumulator; const Boar
     begin
     Cell := PopLowBit_Alt(Pegs);
     index_W := (              (king-1) * 64 + Cell) * OutputLayerSize;
-    index_B := (Black * 384 + (king-1) * 64 + (Cell xor 56)) * OutputLayerSize;
-    Accumulator.Add_asm(@Weights[index_W], @Weights[index_B]);
+    Accumulator.Add_asm(@Weights[index_W]);
     end;
 
 
@@ -470,8 +504,7 @@ procedure TGameNet.RefreshAccumulator(var Accumulator : TAccumulator; const Boar
     begin
     Cell := PopLowBit_Alt(Pegs);
     index_W := (Black * 384 + (pawn-1) * 64 + Cell) * OutputLayerSize;
-    index_B := (              (pawn-1) * 64 + (Cell xor 56)) * OutputLayerSize;
-    Accumulator.Add_asm(@Weights[index_W], @Weights[index_B]);
+    Accumulator.Add_asm(@Weights[index_W]);
     end;
 
   Pegs := Board.BlackPegs and Board.Knights;
@@ -479,8 +512,7 @@ procedure TGameNet.RefreshAccumulator(var Accumulator : TAccumulator; const Boar
     begin
     Cell := PopLowBit_Alt(Pegs);
     index_W := (Black * 384 + (knight-1) * 64 + Cell) * OutputLayerSize;
-    index_B := (              (knight-1) * 64 + (Cell xor 56)) * OutputLayerSize;
-    Accumulator.Add_asm(@Weights[index_W], @Weights[index_B]);
+    Accumulator.Add_asm(@Weights[index_W]);
     end;
 
   Pegs := Board.BlackPegs and Board.Bishops;
@@ -488,8 +520,7 @@ procedure TGameNet.RefreshAccumulator(var Accumulator : TAccumulator; const Boar
     begin
     Cell := PopLowBit_Alt(Pegs);
     index_W := (Black * 384 + (bishop-1) * 64 + Cell) * OutputLayerSize;
-    index_B := (              (bishop-1) * 64 + (Cell xor 56)) * OutputLayerSize;
-    Accumulator.Add_asm(@Weights[index_W], @Weights[index_B]);
+    Accumulator.Add_asm(@Weights[index_W]);
     end;
 
   Pegs := Board.BlackPegs and Board.Rooks;
@@ -497,8 +528,7 @@ procedure TGameNet.RefreshAccumulator(var Accumulator : TAccumulator; const Boar
     begin
     Cell := PopLowBit_Alt(Pegs);
     index_W := (Black * 384 + (rook-1) * 64 + Cell) * OutputLayerSize;
-    index_B := (              (rook-1) * 64 + (Cell xor 56)) * OutputLayerSize;
-    Accumulator.Add_asm(@Weights[index_W], @Weights[index_B]);
+    Accumulator.Add_asm(@Weights[index_W]);
     end;
 
   Pegs := Board.BlackPegs and Board.Queens;
@@ -506,8 +536,7 @@ procedure TGameNet.RefreshAccumulator(var Accumulator : TAccumulator; const Boar
     begin
     Cell := PopLowBit_Alt(Pegs);
     index_W := (Black * 384 + (queen-1) * 64 + Cell) * OutputLayerSize;
-    index_B := (              (queen-1) * 64 + (Cell xor 56)) * OutputLayerSize;
-    Accumulator.Add_asm(@Weights[index_W], @Weights[index_B]);
+    Accumulator.Add_asm(@Weights[index_W]);
     end;
 
   Pegs := Board.BlackPegs and Board.Kings;
@@ -515,11 +544,112 @@ procedure TGameNet.RefreshAccumulator(var Accumulator : TAccumulator; const Boar
     begin
     Cell := PopLowBit_Alt(Pegs);
     index_W := (Black * 384 + (king-1) * 64 + Cell) * OutputLayerSize;
-    index_B := (              (king-1) * 64 + (Cell xor 56)) * OutputLayerSize;
-    Accumulator.Add_asm(@Weights[index_W], @Weights[index_B]);
+    Accumulator.Add_asm(@Weights[index_W]);
     end;
 
-  Accumulator.Save_asm;
+  Accumulator.Save_asm(white);
+
+
+  Accumulator.LoadBias_asm(@Bias[0]);
+
+  Pegs := Board.WhitePegs and Board.Pawns;
+  while Pegs <> 0 do
+    begin
+    Cell := PopLowBit_Alt(Pegs);
+    index_B := (Black * 384 + (pawn-1) * 64 + (Cell xor 56)) * OutputLayerSize;
+    Accumulator.Add_asm(@Weights[index_B]);
+    end;
+
+  Pegs := Board.WhitePegs and Board.Knights;
+  while Pegs <> 0 do
+    begin
+    Cell := PopLowBit_Alt(Pegs);
+    index_B := (Black * 384 + (knight-1) * 64 + (Cell xor 56)) * OutputLayerSize;
+    Accumulator.Add_asm(@Weights[index_B]);
+    end;
+
+  Pegs := Board.WhitePegs and Board.Bishops;
+  while Pegs <> 0 do
+    begin
+    Cell := PopLowBit_Alt(Pegs);
+    index_B := (Black * 384 + (bishop-1) * 64 + (Cell xor 56)) * OutputLayerSize;
+    Accumulator.Add_asm(@Weights[index_B]);
+    end;
+
+  Pegs := Board.WhitePegs and Board.Rooks;
+  while Pegs <> 0 do
+    begin
+    Cell := PopLowBit_Alt(Pegs);
+    index_B := (Black * 384 + (rook-1) * 64 + (Cell xor 56)) * OutputLayerSize;
+    Accumulator.Add_asm(@Weights[index_B]);
+    end;
+
+  Pegs := Board.WhitePegs and Board.Queens;
+  while Pegs <> 0 do
+    begin
+    Cell := PopLowBit_Alt(Pegs);
+    index_B := (Black * 384 + (queen-1) * 64 + (Cell xor 56)) * OutputLayerSize;
+    Accumulator.Add_asm(@Weights[index_B]);
+    end;
+
+  Pegs := Board.WhitePegs and Board.Kings;
+  while Pegs <> 0 do
+    begin
+    Cell := PopLowBit_Alt(Pegs);
+    index_B := (Black * 384 + (king-1) * 64 + (Cell xor 56)) * OutputLayerSize;
+    Accumulator.Add_asm(@Weights[index_B]);
+    end;
+
+
+  Pegs := Board.BlackPegs and Board.Pawns;
+  while Pegs <> 0 do
+    begin
+    Cell := PopLowBit_Alt(Pegs);
+    index_B := (              (pawn-1) * 64 + (Cell xor 56)) * OutputLayerSize;
+    Accumulator.Add_asm(@Weights[index_B]);
+    end;
+
+  Pegs := Board.BlackPegs and Board.Knights;
+  while Pegs <> 0 do
+    begin
+    Cell := PopLowBit_Alt(Pegs);
+    index_B := (              (knight-1) * 64 + (Cell xor 56)) * OutputLayerSize;
+    Accumulator.Add_asm(@Weights[index_B]);
+    end;
+
+  Pegs := Board.BlackPegs and Board.Bishops;
+  while Pegs <> 0 do
+    begin
+    Cell := PopLowBit_Alt(Pegs);
+    index_B := (              (bishop-1) * 64 + (Cell xor 56)) * OutputLayerSize;
+    Accumulator.Add_asm(@Weights[index_B]);
+    end;
+
+  Pegs := Board.BlackPegs and Board.Rooks;
+  while Pegs <> 0 do
+    begin
+    Cell := PopLowBit_Alt(Pegs);
+    index_B := (              (rook-1) * 64 + (Cell xor 56)) * OutputLayerSize;
+    Accumulator.Add_asm(@Weights[index_B]);
+    end;
+
+  Pegs := Board.BlackPegs and Board.Queens;
+  while Pegs <> 0 do
+    begin
+    Cell := PopLowBit_Alt(Pegs);
+    index_B := (              (queen-1) * 64 + (Cell xor 56)) * OutputLayerSize;
+    Accumulator.Add_asm(@Weights[index_B]);
+    end;
+
+  Pegs := Board.BlackPegs and Board.Kings;
+  while Pegs <> 0 do
+    begin
+    Cell := PopLowBit_Alt(Pegs);
+    index_B := (              (king-1) * 64 + (Cell xor 56)) * OutputLayerSize;
+    Accumulator.Add_asm(@Weights[index_B]);
+    end;
+
+  Accumulator.Save_asm(black);
   end;
 
 
@@ -541,17 +671,99 @@ procedure TGameNet.UpdateAccumulator(const SourceAccumulator : TAccumulator; var
   ColourOffset :=  (1-Board.ToPlay) * 384;
   PieceOffset := (Piece - 1) * 64;
 
-  SourceAccumulator.Load_asm;
+
+  SourceAccumulator.Load_asm(white);
 
   // source
   index_W := (ColourOffset + PieceOffset + source) * OutputLayerSize;
-  index_B := ((384 - ColourOffset) + PieceOffset + (source xor 56)) * OutputLayerSize;
-  SourceAccumulator.Sub_asm(@Weights[index_W], @Weights[index_B]);
+  SourceAccumulator.Sub_asm(@Weights[index_W]);
 
   // dest
   index_W := (ColourOffset + PieceOffset + dest) * OutputLayerSize;
+  SourceAccumulator.Add_asm(@Weights[index_W]);
+
+  // captured piece
+
+
+  if CapturedPiece <> 0 then  // deducts captured piece values from accumulator
+    begin
+    TempDest := Dest;
+
+    if (CapturedPiece = pawn) and (epCell = Dest) then
+      begin
+      if Board.ToPlay = Black then
+        TempDest := Dest + 8
+       else
+        TempDest := Dest - 8;
+      end;
+
+    PieceOffset := (CapturedPiece - 1) * 64;
+
+    index_W := ((384 - ColourOffset) + PieceOffset + TempDest) * OutputLayerSize;
+    SourceAccumulator.Sub_asm(@Weights[index_W]);
+    end;
+
+  // promotion piece
+
+  if PromotionPiece <> 0 then // add promotion piece & deduct pawn from accummulator
+    begin
+    PieceOffset := (Pawn - 1) * 64;
+    index_W := (ColourOffset + PieceOffset + Dest) * OutputLayerSize;
+    SourceAccumulator.Sub_asm(@Weights[index_W]);
+
+    PieceOffset := (PromotionPiece - 1) * 64;
+    index_W := (ColourOffset + PieceOffset + Dest) * OutputLayerSize;
+    SourceAccumulator.Add_asm(@Weights[index_W]);
+    end;
+
+  // castling move
+
+  if (Piece = King) then
+    begin
+    if (Dest - Source = 2) then    // King Side Castle, adjust rook
+      begin
+      TempDest := Dest - 1;
+      TempSource := Source + 3;
+      PieceOffset := (Rook - 1) * 64;
+
+      // source
+      index_W := (ColourOffset + PieceOffset + TempSource) * OutputLayerSize;
+      SourceAccumulator.Sub_asm(@Weights[index_W]);
+
+      // dest
+      index_W := (ColourOffset + PieceOffset + TempDest) * OutputLayerSize;
+      SourceAccumulator.Add_asm(@Weights[index_W]);
+      end;
+
+    if (Dest - Source = -2) then   // Queen Side Castle, adjust rook
+      begin
+      TempDest := Dest + 1;
+      TempSource := Source - 4;
+      PieceOffset := (Rook - 1) * 64;
+
+      // source
+      index_W := (ColourOffset + PieceOffset + TempSource) * OutputLayerSize;
+      SourceAccumulator.Sub_asm(@Weights[index_W]);
+
+      // dest
+      index_W := (ColourOffset + PieceOffset + TempDest) * OutputLayerSize;
+      SourceAccumulator.Add_asm(@Weights[index_W]);
+      end;
+    end;
+
+  DestAccumulator.Save_asm(white);
+
+  SourceAccumulator.Load_asm(black);
+
+  PieceOffset := (Piece - 1) * 64;
+
+  // source
+  index_B := ((384 - ColourOffset) + PieceOffset + (source xor 56)) * OutputLayerSize;
+  SourceAccumulator.Sub_asm(@Weights[index_B]);
+
+  // dest
   index_B := ((384 - ColourOffset) + PieceOffset + (dest xor 56)) * OutputLayerSize;
-  SourceAccumulator.Add_asm(@Weights[index_W], @Weights[index_B]);
+  SourceAccumulator.Add_asm(@Weights[index_B]);
 
   // captured piece
 
@@ -569,9 +781,8 @@ procedure TGameNet.UpdateAccumulator(const SourceAccumulator : TAccumulator; var
 
     PieceOffset := (CapturedPiece - 1) * 64;
 
-    index_W := ((384 - ColourOffset) + PieceOffset + TempDest) * OutputLayerSize;
     index_B := (ColourOffset + PieceOffset + (TempDest xor 56)) * OutputLayerSize;
-    SourceAccumulator.Sub_asm(@Weights[index_W], @Weights[index_B]);
+    SourceAccumulator.Sub_asm(@Weights[index_B]);
     end;
 
   // promotion piece
@@ -579,14 +790,12 @@ procedure TGameNet.UpdateAccumulator(const SourceAccumulator : TAccumulator; var
   if PromotionPiece <> 0 then // add promotion piece & deduct pawn from accummulator
     begin
     PieceOffset := (Pawn - 1) * 64;
-    index_W := (ColourOffset + PieceOffset + Dest) * OutputLayerSize;
     index_B := ((384 - ColourOffset) + PieceOffset + (Dest xor 56)) * OutputLayerSize;
-    SourceAccumulator.Sub_asm(@Weights[index_W], @Weights[index_B]);
+    SourceAccumulator.Sub_asm(@Weights[index_B]);
 
     PieceOffset := (PromotionPiece - 1) * 64;
-    index_W := (ColourOffset + PieceOffset + Dest) * OutputLayerSize;
     index_B := ((384 - ColourOffset) + PieceOffset + (Dest xor 56)) * OutputLayerSize;
-    SourceAccumulator.Add_asm(@Weights[index_W], @Weights[index_B]);
+    SourceAccumulator.Add_asm(@Weights[index_B]);
     end;
 
   // castling move
@@ -600,14 +809,12 @@ procedure TGameNet.UpdateAccumulator(const SourceAccumulator : TAccumulator; var
       PieceOffset := (Rook - 1) * 64;
 
       // source
-      index_W := (ColourOffset + PieceOffset + TempSource) * OutputLayerSize;
       index_B := ((384 - ColourOffset) + PieceOffset + (TempSource xor 56)) * OutputLayerSize;
-      SourceAccumulator.Sub_asm(@Weights[index_W], @Weights[index_B]);
+      SourceAccumulator.Sub_asm(@Weights[index_B]);
 
       // dest
-      index_W := (ColourOffset + PieceOffset + TempDest) * OutputLayerSize;
       index_B := ((384 - ColourOffset) + PieceOffset + (TempDest xor 56)) * OutputLayerSize;
-      SourceAccumulator.Add_asm(@Weights[index_W], @Weights[index_B]);
+      SourceAccumulator.Add_asm(@Weights[index_B]);
       end;
 
     if (Dest - Source = -2) then   // Queen Side Castle, adjust rook
@@ -617,20 +824,17 @@ procedure TGameNet.UpdateAccumulator(const SourceAccumulator : TAccumulator; var
       PieceOffset := (Rook - 1) * 64;
 
       // source
-      index_W := (ColourOffset + PieceOffset + TempSource) * OutputLayerSize;
       index_B := ((384 - ColourOffset) + PieceOffset + (TempSource xor 56)) * OutputLayerSize;
-      SourceAccumulator.Sub_asm(@Weights[index_W], @Weights[index_B]);
+      SourceAccumulator.Sub_asm(@Weights[index_B]);
 
       // dest
-      index_W := (ColourOffset + PieceOffset + TempDest) * OutputLayerSize;
       index_B := ((384 - ColourOffset) + PieceOffset + (TempDest xor 56)) * OutputLayerSize;
-      SourceAccumulator.Add_asm(@Weights[index_W], @Weights[index_B]);
+      SourceAccumulator.Add_asm(@Weights[index_B]);
       end;
     end;
 
-  DestAccumulator.Save_asm;
+  DestAccumulator.Save_asm(black);
   end;
-
 
 
 function  TGameNet.ScoreFromAccumulator(const Accumulator : TAccumulator; colour : integer) : integer;
@@ -693,18 +897,24 @@ procedure Refresh_Accumulator(var Accummulator : TAccumulator; const Board : TBo
 
 // ====================== NNUE functions =======================================
 
-procedure Load_GameNet;
+procedure Load_GameNets;
   var
     FileName, FilePath : string;
 
   begin
-  Game_Net.LoadFromResource('_768x128_x2_gen5');    // 'NNUE 768x128_x2 151190269c +70+ gen5.net'
+
+  // Yakka 1.4
+
+  EarlyNet.LoadFromResource('_768x256_x2_gen7_early');  //  NNUE 768x256_x2 31222017c gen7 early.net
+  MidNet.LoadFromResource('_768x256_x2_gen7_mid');      //  NNUE 768x256_x2 85639857c gen7 mid.net
+  LateNet.LoadFromResource('_768x256_x2_gen7_late');    //  NNUE 768x256_x2 169081011c gen7 late.net
+
   end;
 
 
 Initialization
 
   EvalHashTable.ClearTable;
-  Load_GameNet;
+  Load_GameNets;
 
 end.

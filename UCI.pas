@@ -264,7 +264,7 @@ procedure TLexer.GetNextToken;
 
   Start := FCurChar;
 
-  if AnsiChar(FCurChar^) in ['0'..'9'] then
+  if AnsiChar(FCurChar^) in ['-','0'..'9'] then
     begin
     GetNumber;
     exit;
