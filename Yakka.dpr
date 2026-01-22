@@ -1,7 +1,7 @@
-//  The MIT License (MIT)
+﻿//  The MIT License (MIT)
 
 //  Chess Engine Yakka
-//  Copyright (c) 2025 Christopher Crone
+//  Copyright (c) 2026 Christopher Crone
 
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal
@@ -48,19 +48,15 @@ const
   CurrentName = 'Yakka';
 
   {$IfDef DEBUG}
-  CurrentVersion = 'v1.4 debug';
+  CurrentVersion = 'v1.5 debug';
   {$ELSE}
-  CurrentVersion = 'v1.4';
+  CurrentVersion = 'v1.5';
   {$EndIf}
 
-  VersionDate =   '11 Nov 2025';
+  VersionDate =   '22 Jan 2026';
   Author = 'Christopher Crone';
 
-  //   v1.4
-  //  NNUE 768x256_x2 SelfPlay 31222017c +70+ gen7 early 198.net
-  //  NNUE 768x256_x2 SelfPlay 85639857c +70+ gen7 mid 198.net
-  //  NNUE 768x256_x2 SelfPlay 169081011c +70+ gen7 late 198.net
-
+  //   v1.5  net = 'NNUE 768→512x2→1 501451147c +50+ gen8 b6.net'
 
 var
   SearchBoard, Board : TBoard;
@@ -165,6 +161,7 @@ procedure ExecuteProgram;
     WriteLn(output, AnsiString('Warning : CPU doesn''t support PopCnt asm instruction'));
     WriteLn(output, AnsiString('Yakka will not run correctly on this CPU'));
     WriteLn(output, AnsiString('type ''quit'' to exit'));
+    WriteLn(output, AnsiString(' '));
     end;
 
   if BMI2_Supported = false then
@@ -174,6 +171,7 @@ procedure ExecuteProgram;
     WriteLn(output, AnsiString('PEXT and PDEP asm instructions are required for move generation'));
     WriteLn(output, AnsiString('Yakka will not run correctly on this CPU'));
     WriteLn(output, AnsiString('type ''quit'' to exit'));
+    WriteLn(output, AnsiString(' '));
     end;
 
   if AVX2_Supported = false then
@@ -183,7 +181,18 @@ procedure ExecuteProgram;
     WriteLn(output, AnsiString('AVX2 instructions are required for NNUE evaluation'));
     WriteLn(output, AnsiString('Yakka will not run correctly on this CPU'));
     WriteLn(output, AnsiString('type ''quit'' to exit'));
+    WriteLn(output, AnsiString(' '));
     end;
+
+  {if AVX2_Supported = true then
+    WriteLn(output, AnsiString('AVX2 supported by the CPU'))
+   else
+    WriteLn(output, AnsiString('AVX2 not supported by the CPU'));
+
+  if AVX512f_Supported = true then
+    begin
+    WriteLn(output, AnsiString('AVX512 supported by the CPU'));
+    end; }
 
   //WriteLn('To quit, type Q followed by ENTER');
 
