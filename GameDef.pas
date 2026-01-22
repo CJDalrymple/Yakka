@@ -709,7 +709,7 @@ function TBoard.Clan : TBoardKind;
     index : integer;
 
   begin
-  if bitcount(Queens or Rooks or Bishops or Knights) < 7 then
+  if bitcount(Queens or Rooks or Bishops or Knights) < 5 then   // was 7
     exit(lategame);
 
   if (bitcount(Queens or Rooks or Bishops or Knights) < 11) or
@@ -3689,6 +3689,9 @@ procedure TBoard.FillHashTables;
 
   for i := 0 to 63 do
     TBoard.epHash[i] := PRNG.Rand64;
+
+
+
   end;
 
 

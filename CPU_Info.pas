@@ -1,7 +1,7 @@
 //  The MIT License (MIT)
 
 //  Chess Engine Yakka
-//  Copyright (c) 2025 Christopher Crone
+//  Copyright (c) 2026 Christopher Crone
 
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal
@@ -45,9 +45,10 @@ function PopCnt_Supported : boolean;
   PUSH RBX
   MOV EAX, $1
   CPUID
-  AND ECX, $800000             // bit 23 of ECX
+  SHR ECX, 23     // bit 23 of ECX
+  AND RCX, $1
   MOV RAX, RCX
-  SHR RAX, $17
+
   POP RBX
   end;
 
@@ -59,9 +60,10 @@ function BMI2_Supported : boolean;
   MOV EAX, $7
   XOR ECX, ECX
   CPUID
-  AND EBX, $100               // bit 8 of EBX
+  SHR EBX, 8     // bit 8 of EBX
+  AND RBX, $1
   MOV RAX, RBX
-  SHR RAX, $8
+
   POP RBX
   end;
 
@@ -71,9 +73,10 @@ function SSE_Supported : boolean;
   PUSH RBX
   MOV EAX, $1
   CPUID
-  AND EDX, $2000000          // bit 25 of EDX
-  MOV RAX, RCX
-  SHR RAX, $19
+  SHR EDX, 25     // bit 25 of EDX
+  AND RDX, $1
+  MOV RAX, RDX
+
   POP RBX
   end;
 
@@ -86,21 +89,40 @@ function SSE2_Supported : boolean;
   PUSH RBX
   MOV EAX, $1
   CPUID
-  AND EDX, $4000000          // bit 26 of EDX
+  SHR EDX, 26     // bit 26 of EDX
+  AND RDX, $1
   MOV RAX, RDX
-  SHR RAX, $1A
+
   POP RBX
   end;
 
+
+// FMA required for vfmadd231ps instruction used in unit : NNUE
+
+function FMA_Supported : boolean;
+  asm
+  PUSH RBX
+  MOV EAX, $1
+  CPUID
+  SHR ECX, 12     // bit 12 of ECX
+  AND RCX, $1
+  MOV RAX, RCX
+
+  POP RBX
+  end;
+
+
+// AVX required for vmovups, vmaxps, vextractf128 ....  instructions used in unit : NNUE
 
 function AVX_Supported : boolean;
   asm
   PUSH RBX
   MOV EAX, $1
   CPUID
-  AND ECX, $10000000             // bit 28 of ECX
+  SHR ECX, 28    // bit 28 of ECX
+  AND RCX, $1
   MOV RAX, RCX
-  SHR RAX, $1C
+
   POP RBX
   end;
 
@@ -111,9 +133,10 @@ function AVX2_Supported : boolean;
   MOV EAX, $7
   XOR ECX, ECX
   CPUID
-  AND EBX, $20          // bit 5 of EBX
+  SHR EBX, 5       // bit 5 of EBX
+  AND RBX, $1
   MOV RAX, RBX
-  SHR RAX, $5
+
   POP RBX
   end;
 
@@ -124,9 +147,10 @@ function AVX512f_Supported : boolean;
   MOV EAX, $7
   XOR ECX, ECX
   CPUID
-  AND EBX, $1000      // bit 16 of EBX
+  SHR EBX, 16      // bit 16 of EBX
+  AND RBX, $1
   MOV RAX, RBX
-  SHR RAX, $10
+
   POP RBX
   end;
 
@@ -137,11 +161,13 @@ function AVX512fp16_Supported : boolean;
   MOV EAX, $7
   XOR ECX, ECX
   CPUID
-  AND EDX, $800000      // bit 23 of EDX
-  MOV RAX, RDX
-  SHR RAX, $17
+  SHR EDX, 23      // bit 23 of EDX
+  AND RDX, $1
+  MOV RAX, RBX
+
   POP RBX
   end;
+
 
 
 end.

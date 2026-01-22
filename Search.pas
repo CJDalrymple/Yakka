@@ -1,7 +1,7 @@
 //  The MIT License (MIT)
 
 //  Chess Engine Yakka
-//  Copyright (c) 2025 Christopher Crone
+//  Copyright (c) 2026 Christopher Crone
 
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal
@@ -556,7 +556,7 @@ function TTransTable.RetrieveData(HashCode : UInt64; var Data : UInt64) : boolea
 
   if (UID xor Data) <> HashCode then
     begin
-    inc(index);                          // second slot
+    inc(index);                             // second slot
     UID := Table[index].UID;
     Data := Table[index].Data;
     if (UID xor Data) <> HashCode then
@@ -1086,7 +1086,7 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
     NewNodetype, c, m, epCell, piece : integer;
     NewDepth, NullDepth : integer;
     LMR_Flag, TT_OKtoStore : boolean;
-    FullDepthMoves, LMR, SEE_Value: integer;
+    FullDepthMoves, LMR, SEE_Value, MinReduction: integer;
     sDepth, sValue, sBeta, sExtension, TTScore, TTDepth  : integer;
     NowTick, ElapsedTicks : Int64;
 
@@ -1509,7 +1509,8 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
 
   if (ply > 1) and (depth > 2) and not InCheck then       // only undertake LMR for ply 2 and greater
     begin
-    FullDepthMoves := 3 + GetHighBit_Alt(depth + 1);      // GetHighBit_alt is undefined when argument = 0
+
+    FullDepthMoves := 4;
 
     for i := FullDepthMoves to MoveCount do               // flag potential moves for reduction
       if Moves[i] < UInt64($4000000000000000) then        // i.e. don't reduce winning captures, promotion, killer and countermoves
@@ -1594,13 +1595,23 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
 
       if LMR_Flag = true then
         begin
+        LMR := max((GetHighBit_Alt(k*3) * GetHighBit_Alt(depth+3)) shr 2, 4) - ord(improving);     // k = 2..32 : highbit = 1..5,  depth = 24..1 : highbit = 4..0
+
+        if NodeType = PV_Node then
+          LMR := LMR shr 1;
+
+        newdepth := max(1, depth - LMR);
+        end;
+
+        (*
+        begin
         if NodeType = PV_Node then
           LMR :=  1
          else
           LMR := max((GetHighBit_Alt(k) + GetHighBit_Alt(depth) + 1) shr 1, 2);     // k = 2..32 : highbit = 1..5,  depth = 24..1 : highbit = 4..0
 
         newdepth := max(1, depth - LMR);
-        end;
+        end;   *)
 
       if (moves[k] < $4000000000000000) and (moves[k] > $1000000000000000) and (alpha < MateScoreCutoff) and (depth < 8) then     // quiet move
         begin
@@ -1614,7 +1625,7 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
 
         // late move pruning : prune late quiet moves that lose too much material
 
-        if LMR_Flag = true then
+       (* if LMR_Flag = true then
           begin
 
           SEE_Value := Board.SEE(Move);
@@ -1624,7 +1635,7 @@ function PVS_ABDADA(Search : TSearchPtr; ThreadData : T_ThreadDataPtr; ply, dept
             Board.UndoMove(Move);
             continue;
             end;
-          end;
+          end;    *)
 
         inc(QuietsTried);          // inc quiet moves
         end;
@@ -2114,12 +2125,6 @@ procedure TSearch.ABDADA_Search_Threaded(const Board : TBoard; const GameMoveLis
 
   LoadSignatureList(Board, GameMoveList);   // required for repetition check
 
-    case Board.clan of
-    earlygame : Game_Net := @EarlyNet;
-    midgame : Game_Net := @MidNet;
-    lategame : Game_Net := @LateNet;
-    end;
-
   alpha := -InfiniteValue;
   beta  :=  InfiniteValue;
 
@@ -2480,12 +2485,6 @@ procedure TSearch.ABDADA_Search_NonThreaded(const Board : TBoard; const GameMove
     PrepareForNextSearch;              // clears all tables except Transposition Table
 
   LoadSignatureList(Board, GameMoveList);   // required for repetition check
-
-    case Board.clan of
-    earlygame : Game_Net := @EarlyNet;
-    midgame : Game_Net := @MidNet;
-    lategame : Game_Net := @LateNet;
-    end;
 
   alpha := -InfiniteValue;
   beta  :=  InfiniteValue;

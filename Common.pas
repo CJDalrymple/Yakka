@@ -1,7 +1,7 @@
 ﻿//  The MIT License (MIT)
 
 //  Chess Engine Yakka
-//  Copyright (c) 2025 Christopher Crone
+//  Copyright (c) 2026 Christopher Crone
 
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal
@@ -59,6 +59,7 @@ type
       PRNG_hi : UInt64;   //  PRNG state
 
     public
+      class operator Initialize(out Dest: TPRNG);
       function Rand64 : UInt64;
       procedure Randomize;
       procedure Seed(x1, x2 : UInt64);
@@ -133,6 +134,12 @@ procedure TAnonThread.Execute;
 
 
 // TPRNG
+
+class operator TPRNG.Initialize(out Dest: TPRNG);
+  begin
+  Dest.Randomize;
+  end;
+
 
 function TPRNG.Rand64 : UInt64;
   asm

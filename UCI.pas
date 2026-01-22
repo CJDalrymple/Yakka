@@ -1,7 +1,7 @@
 //  The MIT License (MIT)
 
 //  Chess Engine Yakka
-//  Copyright (c) 2025 Christopher Crone
+//  Copyright (c) 2026 Christopher Crone
 
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal
@@ -26,7 +26,7 @@ unit UCI;
 
 interface
   uses
-    System.Classes, System.SysUtils, System.StrUtils, System.Character, System.Math, GameDef, Common, Search;
+    System.Classes, System.SysUtils, System.StrUtils, System.Character, System.Math, GameDef, GameNet, Common, CPU_Info, Search;
 
   type TTokenKind =
         (tok_Undefined,
@@ -400,6 +400,12 @@ procedure DisplayID(CurrentName, CurrentVersion, Author : Ansistring);      // r
 
   WriteLn(output, AnsiString(' '));
 
+  if AVX512f_Supported = true then
+    begin
+    WriteLn(output, AnsiString('AVX512 supported by the CPU'));
+    WriteLn(output, AnsiString(' '));
+    end;
+
   WriteLn(output, AnsiString('uciok'));
   flush(output);
   end;
@@ -448,6 +454,7 @@ procedure New_Game(var Board : TBoard; var GameMoveList : TGameMoveList; var PVS
   PVS_Search.NewGame;
   Board.Reset;
   GameMoveList.Clear;
+  EvalHashTable.Clear;
   end;
 
 
