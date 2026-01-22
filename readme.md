@@ -42,8 +42,8 @@ To build the engine from source, use Delphi 12.0 Alexandra or later version.
 + Open Project Resources and Images..., add the following to Resource Files:
    + File Name: `Opening_Book_00.txt`
    + Type: `RCDATA`
-   + Identifier: `Open_Book`
-      +         
+   + Identifier: `Open_Book`  
+     +               
    + File Name: `NNUE 768→512x2→1 501451147c +50+ gen8 b6.net`  
    + Type: `RCDATA`  
    + Identifier: `_768x512_x2_gen8_b6`  
@@ -121,3 +121,4 @@ In no particular order:
 * Much experimenting / tweaking
 * MultiPV
 * Endgame Tablebases
+
