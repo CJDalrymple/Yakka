@@ -1,7 +1,7 @@
 //  The MIT License (MIT)
 
 //  Chess Engine Yakka
-//  Copyright (c) 2025 Christopher Crone
+//  Copyright (c) 2026 Christopher Crone
 
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal
@@ -40,7 +40,7 @@ const
   Queen = 5;
   King = 6;
 
-  PieceValue : array[0..6] of integer =  (0, 100, 300, 300, 500, 900, 2400);
+  PieceValue : array[0..6] of integer =  (0, 100, 300, 300, 500, 900, 0);
 
   White = 0;
   Black = 1;
@@ -51,7 +51,7 @@ const
 
   InvalidBoard = UInt64($FFFFFFFFFFFFFFFF);
 
-  whitesqr  = UInt64($AA55AA55AA55AA55);
+  whitesqr = UInt64($AA55AA55AA55AA55);
   blacksqr = UInt64($55AA55AA55AA55AA);
 
   Left_Side   = UInt64($0F0F0F0F0F0F0F0F);   //   a..d
@@ -61,27 +61,16 @@ const
   colourNamesShort : array[White..Black] of string = ('W', 'B');
   colourNamesLong : array[White..Black] of string = ('White', 'Black');
 
-  Board_Top_Half    = UInt64($00000000FFFFFFFF);   //   5..8
-  Board_Bottom_Half = UInt64($FFFFFFFF00000000);   //   1..4
-  Board_Left_Half   = UInt64($0F0F0F0F0F0F0F0F);   //   a..d
-  Board_Right_Half  = UInt64($F0F0F0F0F0F0F0F0);   //   e..h
-
-  Board_White =  UInt64($AA55AA55AA55AA55);
-  Board_Black =  UInt64($55AA55AA55AA55AA);
-
-  Board_LeftEdge = UInt64($0101010101010101);
-  Board_RightEdge  = UInt64($8080808080808080);
-
-
+type
+  THashTable = array[White..Black, Pawn..King, 0..63] of UInt64;       // 12 x 64
+  THalfMoveHashTable = array[0..101] of UInt64;
 
 type
- THashTable = array[White..Black, Pawn..King, 0..63] of UInt64;       // 12 x 64
-
-type
- TMove = UInt64;
-
-type
+  TMove = UInt64;
   TMoveArray = array[0..255] of TMove;
+  TPVArray = array[0..127] of TMove;
+
+  T_PV_array = array of TPVArray;
 
   // array[0]      bits 0..7   : Move Count
   // array[0]      bit 12      : unknown Result
@@ -103,12 +92,12 @@ type
   //   bits 24..29   : Castling Rights i.e. 6 bits indicating if 4 rooks & 2 kings have moved
   //   bits 30..35   : Enpassant Cell
   //   bits 36..43   : Half Move Count  i.e. in range [0..255]
-  //   bit  44       : LMR flag used during search
+  //   bit  46       : LMR flag used during search
   //   bits 48..63   : 16 bits available for Move value or other uses
 
 
 type
-  TBoardKind = (earlygame, midgame, midgame_Kk, midgame_Kq, midgame_Qk, midgame_Qq, lategame, Allgame);
+  TBoardKind = (earlygame, midgame, lategame, Allgame);
 
 type
   TMoveView = record
@@ -141,7 +130,7 @@ type
     function Score : integer;              inline;
     procedure SetScore(Score : integer);
     function IsValid : boolean;            inline;
-    function ToStr : Ansistring;
+    function ToStr : AnsiString;
     function View : TMoveView;
     end;
 
@@ -179,6 +168,7 @@ type
   const
     HashTableSeed_0 = $5A5DC759;     //  best
     HashTableSeed_1 = $c2b2aeC7;     //  best
+    HalfMoveReductionCutoff = 64;
 
   var
     WhitePegs : UInt64;
@@ -199,11 +189,13 @@ type
 
     TurnNumber : integer;
     HalfCount : integer;
-
     Hash : UInt64;
+    alignmentpad : array[0..15] of byte;
 
   class var
     HashTable : THashTable;
+    HalfMoveHashTable : THalfMoveHashTable;
+
     PlayerHash : UInt64;
     CastleHash : array[0..63] of UInt64;
     epHash : array[0..63] of UInt64;
@@ -227,23 +219,25 @@ type
     BlackPawnMoves : array[0..63] of UInt64;
     BlackPawnCaptures : array[0..63] of UInt64;
 
-    IsInitialized : array[0..0] of integer;       // 0 = uninitialized, -1 = initialized
+    IsInitializedFlag : array[0..0] of integer;       // 0 = uninitialized, -1 = initialized
 
   procedure Reset;
   procedure ClearBoard;
   procedure CalcHash;
   procedure CalcGameStage;
 
+  function IsInitialized : boolean;
   function MakeMove(var Move : UInt64) : boolean;
   function UndoMove(const Move : UInt64) : boolean;
 
   function MakeMoveNoHash(var Move : UInt64) : boolean;
   function UndoMoveNoHash(const Move : UInt64) : boolean;
 
+  function MakeCaptureSEE(Move: UInt64): boolean;
   function GetMoveHash(var Move : UInt64) : UInt64;
 
   function GetValidMoves(Player : integer; var moves : TMoveArray; ViolentOnly : boolean) : integer;
-  function GetCapturePromotionAndCheckingMoves(Player : integer; var moves : TMoveArray) : integer;
+  function GetCapturePromotionCheckingMoves(Player : integer; var moves : TMoveArray) : integer;
   function GetCaptureMove(TargetCell : integer) : TMove;
 
   function GetCellValidMoves(Player : integer; CellIndex : integer) : UInt64;
@@ -275,6 +269,7 @@ type
   function KingInCheck(Player : integer) : boolean;  overload;
   function AdjacentKings : boolean;
   function IsMoveLegal(Move : TMove) : boolean;
+  function IsMoveValid(Move : TMove) : boolean;
 
   function MoveExists(var InCheck : boolean) : boolean;
   function KingOnly(Player : integer) : boolean;         inline;
@@ -303,20 +298,24 @@ type
   function GetPiece(CellIndex : integer) : integer;
   function GetPiece_asm(CellIndex : integer) : integer;
 
-  function GetMixedness : integer;
-  function Clan : TBoardKind;
+  function HalfMoveHash : UInt64;        inline;
+  function MaterialValue(Player : integer) : integer;
 
   procedure FlipColor;
   end;
 
-procedure BoardFromFEN(const FEN : string; var Board : TBoard);
+function BoardFromFEN(const FEN : string; var Board : TBoard) : boolean;
 procedure BoardToFen(var FEN : AnsiString; const Board : TBoard);
 
 function MovesToStr(moves : TMoveArray) : string;
 function MoveToStr(Move : UInt64) : string;
-function PVToStr(PV : TMoveArray) : string;
+function PVToStr(PV : TMoveArray) : string;        overload;
+function PVToStr(PV : TPVArray) : string;          overload;
+function PVToStr(PV : TPVArray; maxdepth : integer) : string;          overload;
 
 function CopyBoard(const Board : TBoard) : TBoard;
+function CopyBoard_asm(const Board : TBoard) : TBoard;
+
 function IsBoardLegal(const Board : TBoard) : boolean;
 
 function ItemCount(const MoveArray : TMoveArray) : integer;
@@ -456,7 +455,7 @@ function TMoveHelper.IsValid : boolean;
   end;
 
 
-function TMoveHelper.ToStr : Ansistring;
+function TMoveHelper.ToStr : AnsiString;
   var
     source, Dest, FileNo, Rank, PromotionPiece : integer;
 
@@ -579,6 +578,8 @@ procedure TBoard.FlipColor;
 
   EnPassant := Flip(EnPassant);
   MovedPieces := Flip(MovedPieces);
+
+  CalcHash;
   end;
 
 
@@ -650,75 +651,9 @@ function TBoard.GetPiece_asm(CellIndex : integer) : integer;
   end;
 
 
-function TBoard.GetMixedness : integer;
-  // from scalachess/core/src/scala/divider.scala
-
-  var x, y : integer;
-      region : UInt64;
-      blackcount, whitecount : integer;
-
+function TBoard.HalfMoveHash : UInt64;
   begin
-  result := 0;
-  for y := 0 to 6 do
-    for x := 0 to 6 do
-      begin
-      region := UInt64($303) shl (x + 8*(6-y));
-      whitecount := bitcount(region and WhitePegs);
-      blackcount := bitcount(region and BlackPegs);
-
-      if whitecount = 0 then
-        begin
-          case blackcount of
-          1 : result := result + 1 + y;
-          2 : if y < 6 then result := result + 2 + (6-y);
-          3, 4 : result := result + 3 + (7-y);
-          end;
-        end
-       else if whitecount = 1 then
-        begin
-          case blackcount of
-          0 : result := result + 1 + (8-y);
-          1 : result := result + 5 + abs(4-y);
-          2 : result := result + 4 + (7-y);
-          3 : result := result + 5 + (7-y);
-          end
-        end
-       else if whitecount = 2 then
-        begin
-          case blackcount of
-          0 : if y > 2 then result := result + 2 + (y-2);
-          1 : result := result + 4 + (y-1);
-          2 : result := result + 7;
-          end
-        end
-       else if whitecount = 3 then
-        begin
-          case blackcount of
-          0 : if y > 1 then result := result + 3 + (y-1);
-          1 : result := result + 5 + (y-1);
-          end
-        end
-       else if whitecount = 4 then
-        if y > 1 then result := result + 3 + (y-1);
-      end;
-  end;
-
-
-function TBoard.Clan : TBoardKind;
-  var
-    index : integer;
-
-  begin
-  if bitcount(Queens or Rooks or Bishops or Knights) < 5 then   // was 7
-    exit(lategame);
-
-  if (bitcount(Queens or Rooks or Bishops or Knights) < 11) or
-     (bitcount(BlackPegs and UInt64($00000000000000FF)) < 4) or
-     (bitcount(WhitePegs and UInt64($FF00000000000000)) < 4) or
-     (GetMixedness > 150) then
-       exit(midgame);
-
-  result := earlygame;
+  result := HalfMoveHashTable[ min(HalfCount, high(THalfMoveHashTable)) ];
   end;
 
 
@@ -743,7 +678,7 @@ function TBoard.CountValidMoves(Player : integer) : integer;        // primarili
   KingInCheckFlag := KingInCheck(Player, DefendCheckMask, BlockCheckMask);
   if KinginCheckFlag = true then
     begin
-    SourceCell := GetLowBit_Alt(Kings and PlayerPegs);
+    SourceCell := GetLowBit(Kings and PlayerPegs);
     KingMoves_InCheck(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);    // Get king moves
 
     CaptureMoveCount := CaptureMoveCount + BitCount(CaptureMoves);
@@ -755,12 +690,12 @@ function TBoard.CountValidMoves(Player : integer) : integer;        // primarili
 
   // find pin information
 
-  PinnedPieces := GetPinnedPegs(PlayerPegs);             // Stores result in Board.PinnedPieces field, may be used later during eval i.e. pinned piece penalty
+  PinnedPieces := GetPinnedPegs(PlayerPegs);
 
   SourcePegs := Rooks and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    sourceCell := PopLowBit_Alt(SourcePegs);
+    sourceCell := PopLowBit(SourcePegs);
     RookMoves(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);
     if PinnedPieces and (UInt64($1) shl sourceCell) <> 0 then
       DiscardPinnedMoves(SourceCell, CaptureMoves, QuietMoves);
@@ -772,7 +707,7 @@ function TBoard.CountValidMoves(Player : integer) : integer;        // primarili
   SourcePegs := Bishops and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    SourceCell := PopLowBit_Alt(SourcePegs);
+    SourceCell := PopLowBit(SourcePegs);
     BishopMoves(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);
 
     if PinnedPieces and (UInt64($1) shl sourceCell) <> 0 then
@@ -785,7 +720,7 @@ function TBoard.CountValidMoves(Player : integer) : integer;        // primarili
   SourcePegs := Knights and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    sourceCell := PopLowBit_Alt(SourcePegs);
+    sourceCell := PopLowBit(SourcePegs);
     AllMoves :=  KnightMask[SourceCell];
     QuietMoves := AllMoves and not (AllPegs);
     CaptureMoves := AllMoves and (AllPegs xor PlayerPegs);
@@ -800,7 +735,7 @@ function TBoard.CountValidMoves(Player : integer) : integer;        // primarili
   SourcePegs := Queens and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    SourceCell := PopLowBit_Alt(SourcePegs);
+    SourceCell := PopLowBit(SourcePegs);
     QueenMoves(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);
     if PinnedPieces and (UInt64($1) shl sourceCell) <> 0 then
       DiscardPinnedMoves(SourceCell, CaptureMoves, QuietMoves);
@@ -812,7 +747,7 @@ function TBoard.CountValidMoves(Player : integer) : integer;        // primarili
   if KingInCheckFlag = false then
     begin
     SourcePegs := Kings and PlayerPegs;
-    SourceCell := PopLowBit_Alt(SourcePegs);
+    SourceCell := PopLowBit(SourcePegs);
 
     KingMoves(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);
 
@@ -823,7 +758,7 @@ function TBoard.CountValidMoves(Player : integer) : integer;        // primarili
   SourcePegs := Pawns and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    SourceCell := PopLowBit_Alt(SourcePegs);
+    SourceCell := PopLowBit(SourcePegs);
     PawnMoves(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);
     if PinnedPieces and (UInt64($1) shl sourceCell) <> 0 then
       DiscardPinnedMoves(SourceCell, CaptureMoves, QuietMoves);
@@ -852,7 +787,7 @@ function TBoard.CountValidMoves(Player : integer) : integer;        // primarili
     DestPeg := CaptureMoves and UInt64($FF000000000000FF);
     while DestPeg <> 0 do                        // Pawn Promotion with Capture
       begin
-      DestCell := PopLowBit_Alt(DestPeg);
+      DestCell := PopLowBit(DestPeg);
       CaptureMoveCount := CaptureMoveCount + 4;
       ClearBit(CaptureMoves, DestCell);
       end;
@@ -860,7 +795,7 @@ function TBoard.CountValidMoves(Player : integer) : integer;        // primarili
     while CaptureMoves <> 0 do
       begin
       MoveValidFlag := true;
-      DestCell := PopLowBit_Alt(CaptureMoves);
+      DestCell := PopLowBit(CaptureMoves);
       CapturedPiece := GetPiece_asm(DestCell);
       if CapturedPiece = 0 then          // handle enpassant capture
         MoveValidFlag := EnpassantLegal(Player, DestCell, SourceCell);   // check enpassant move is legal & not putting king in check
@@ -874,7 +809,7 @@ function TBoard.CountValidMoves(Player : integer) : integer;        // primarili
     DestPeg := QuietMoves and UInt64($FF000000000000FF);
     if DestPeg <> 0 then                         // Pawn Promotion without Capture
       begin                                      // Generate all 4 alternative moves
-      DestCell := PopLowBit_Alt(DestPeg);
+      DestCell := PopLowBit(DestPeg);
       QuietMoveCount := QuietMoveCount + 4;
       ClearBit(QuietMoves, DestCell);
       end;
@@ -887,7 +822,7 @@ function TBoard.CountValidMoves(Player : integer) : integer;        // primarili
 
 // =====================================================================================================================================
 
-function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves : TMoveArray) : integer;
+function TBoard.GetCapturePromotionCheckingMoves(Player : integer; var moves : TMoveArray) : integer;
   // result is number of valid moves, all valid moves are contained in 'moves' array
 
   var
@@ -904,30 +839,30 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
   if Player = White then
     begin
     PlayerPegs := WhitePegs;
-    OpponentKingCell := GetLowBit_Alt(Kings and BlackPegs);
+    OpponentKingCell := GetLowBit(Kings and BlackPegs);
     end
    else
     begin
     PlayerPegs := BlackPegs;
-    OpponentKingCell := GetLowBit_Alt(Kings and WhitePegs);
+    OpponentKingCell := GetLowBit(Kings and WhitePegs);
     end;
 
   InCheckFlag := KingInCheck(Player, DefendCheckMask, BlockCheckMask);
   if InCheckFlag = true then
     begin
-    SourceCell := GetLowBit_Alt(Kings and PlayerPegs);
+    SourceCell := GetLowBit(Kings and PlayerPegs);
     KingMoves_InCheck(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);    // Get king moves
 
     while CaptureMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(CaptureMoves);
+      DestCell := PopLowBit(CaptureMoves);
       Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(King) shl 12) or (UInt64(GetPiece_asm(DestCell)) shl 16);
       inc(result);
       end;
 
     while QuietMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(QuietMoves);
+      DestCell := PopLowBit(QuietMoves);
       Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(King) shl 12);
       inc(result);
       end;
@@ -954,7 +889,7 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
   SourcePegs := Queens and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    SourceCell := PopLowBit_Alt(SourcePegs);
+    SourceCell := PopLowBit(SourcePegs);
 
     QueenMoves(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);
 
@@ -964,7 +899,7 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
     CaptureMoves := CaptureMoves and DefendCheckMask;
     while CaptureMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(CaptureMoves);
+      DestCell := PopLowBit(CaptureMoves);
       Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Queen) shl 12) or (UInt64(GetPiece_asm(DestCell)) shl 16);
       inc(result);
       end;
@@ -974,7 +909,7 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
 
     while QuietMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(QuietMoves);
+      DestCell := PopLowBit(QuietMoves);
       Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Queen) shl 12);
       inc(result);
       end;
@@ -983,7 +918,7 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
   SourcePegs := Rooks and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    sourceCell := PopLowBit_Alt(SourcePegs);
+    sourceCell := PopLowBit(SourcePegs);
     RookMoves(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);
     if PinnedPieces and (UInt64($1) shl sourceCell) <> 0 then
       DiscardPinnedMoves(SourceCell, CaptureMoves, QuietMoves);
@@ -991,7 +926,7 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
     CaptureMoves := CaptureMoves and DefendCheckMask;
     while CaptureMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(CaptureMoves);
+      DestCell := PopLowBit(CaptureMoves);
       Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Rook) shl 12) or (UInt64(GetPiece_asm(DestCell)) shl 16);
       inc(result);
       end;
@@ -1001,7 +936,7 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
 
     while QuietMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(QuietMoves);
+      DestCell := PopLowBit(QuietMoves);
       Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Rook) shl 12);
       inc(result);
       end;
@@ -1010,7 +945,7 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
   SourcePegs := Bishops and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    SourceCell := PopLowBit_Alt(SourcePegs);
+    SourceCell := PopLowBit(SourcePegs);
     BishopMoves(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);
 
     if PinnedPieces and (UInt64($1) shl sourceCell) <> 0 then
@@ -1019,7 +954,7 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
     CaptureMoves := CaptureMoves and DefendCheckMask;
     while CaptureMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(CaptureMoves);
+      DestCell := PopLowBit(CaptureMoves);
       Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Bishop) shl 12) or (UInt64(GetPiece_asm(DestCell)) shl 16);
       inc(result);
       end;
@@ -1029,7 +964,7 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
 
     while QuietMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(QuietMoves);
+      DestCell := PopLowBit(QuietMoves);
       Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Bishop) shl 12);
       inc(result);
       end;
@@ -1038,7 +973,7 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
   SourcePegs := Knights and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    sourceCell := PopLowBit_Alt(SourcePegs);
+    sourceCell := PopLowBit(SourcePegs);
     AllMoves :=  KnightMask[SourceCell];
     QuietMoves := AllMoves and not (AllPegs);
     CaptureMoves := AllMoves and (AllPegs xor PlayerPegs);
@@ -1048,7 +983,7 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
       CaptureMoves := CaptureMoves and DefendCheckMask;
       while CaptureMoves <> 0 do
         begin
-        DestCell := PopLowBit_Alt(CaptureMoves);
+        DestCell := PopLowBit(CaptureMoves);
         Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Knight) shl 12) or (UInt64(GetPiece_asm(DestCell)) shl 16);
         inc(result);
         end;
@@ -1058,7 +993,7 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
 
       while QuietMoves <> 0 do
         begin
-        DestCell := PopLowBit_Alt(QuietMoves);
+        DestCell := PopLowBit(QuietMoves);
         Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Knight) shl 12);
         inc(result);
         end;
@@ -1068,13 +1003,13 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
   if InCheckFlag = false then
     begin
     SourcePegs := Kings and PlayerPegs;
-    SourceCell := PopLowBit_Alt(SourcePegs);
+    SourceCell := PopLowBit(SourcePegs);
 
     KingMoves(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);
 
     while CaptureMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(CaptureMoves);
+      DestCell := PopLowBit(CaptureMoves);
       Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(King) shl 12) or (UInt64(GetPiece_asm(DestCell)) shl 16);
       inc(result);
       end;
@@ -1083,7 +1018,7 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
   SourcePegs := Pawns and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    SourceCell := PopLowBit_Alt(SourcePegs);
+    SourceCell := PopLowBit(SourcePegs);
     PawnMoves(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);
     if PinnedPieces and (UInt64($1) shl sourceCell) <> 0 then
       DiscardPinnedMoves(SourceCell, CaptureMoves, QuietMoves);
@@ -1112,7 +1047,7 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
     DestPeg := CaptureMoves and UInt64($FF000000000000FF);
     while DestPeg <> 0 do                        // Pawn Promotion with Capture
       begin
-      DestCell := PopLowBit_Alt(DestPeg);
+      DestCell := PopLowBit(DestPeg);
       temp := GetPiece_asm(DestCell);
       for i := 2 to 5 do                         // Generate all 4 alternative moves
         begin
@@ -1126,7 +1061,7 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
     while CaptureMoves <> 0 do
       begin
       MoveValidFlag := true;
-      DestCell := PopLowBit_Alt(CaptureMoves);
+      DestCell := PopLowBit(CaptureMoves);
       CapturedPiece := GetPiece_asm(DestCell);
 
       if CapturedPiece = 0 then            // handle enpassant capture
@@ -1145,7 +1080,7 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
     DestPeg := QuietMoves and UInt64($FF000000000000FF);
     if DestPeg <> 0 then                         // Pawn Promotion without Capture
       begin                                      // Generate all 4 alternative moves
-      DestCell := PopLowBit_Alt(DestPeg);
+      DestCell := PopLowBit(DestPeg);
       for i := Queen downto Knight do
         begin
         Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Pawn) shl 12) or (UInt64(i) shl 20);
@@ -1159,7 +1094,7 @@ function TBoard.GetCapturePromotionAndCheckingMoves(Player : integer; var moves 
 
     while QuietMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(QuietMoves);
+      DestCell := PopLowBit(QuietMoves);
       Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Pawn) shl 12);
       inc(result);
       end;
@@ -1178,9 +1113,9 @@ function TBoard.GetValidMoves(Player : integer; var moves : TMoveArray; ViolentO
 
   var
     SourcePegs, PlayerPegs, QuietMoves, CaptureMoves, DestPeg, DefendCheckMask, BlockCheckMask, EnpassantCapture, AllMoves, AllPegs : UInt64;
-    sourceCell, destCell, temp, i, CapturedPiece : integer;
+    temp, i, CapturedPiece : integer;
     MoveValidFlag, InCheckFlag : boolean;
-    OpponentPegs, PinnedPieces : UInt64;
+    OpponentPegs, PinnedPieces, TempMov, sourceCell, destCell : UInt64;
 
   begin
   result := 1;
@@ -1193,23 +1128,23 @@ function TBoard.GetValidMoves(Player : integer; var moves : TMoveArray; ViolentO
     PlayerPegs := BlackPegs;
 
   OpponentPegs := PlayerPegs xor AllPegs;
-
   InCheckFlag := KingInCheck(Player, DefendCheckMask, BlockCheckMask);
+
   if InCheckFlag = true then
     begin
-    SourceCell := GetLowBit_Alt(Kings and PlayerPegs);
+    SourceCell := GetLowBit(Kings and PlayerPegs);
     KingMoves_InCheck(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);    // Get king moves
 
     while CaptureMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(CaptureMoves);
+      DestCell := PopLowBit(CaptureMoves);
       Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(King) shl 12) or (UInt64(GetPiece_asm(DestCell)) shl 16);
       inc(result);
       end;
 
     while QuietMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(QuietMoves);
+      DestCell := PopLowBit(QuietMoves);
       Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(King) shl 12);
       inc(result);
       end;
@@ -1237,7 +1172,8 @@ function TBoard.GetValidMoves(Player : integer; var moves : TMoveArray; ViolentO
   SourcePegs := Queens and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    SourceCell := PopLowBit_Alt(SourcePegs);
+    SourceCell := PopLowBit(SourcePegs);
+    tempMov := SourceCell or (UInt64(Queen) shl 12);
 
     AllMoves := RookAttack_asm(SourceCell) or BishopAttack_asm(SourceCell);
     if PinnedPieces and (UInt64($1) shl sourceCell) <> 0 then
@@ -1246,16 +1182,16 @@ function TBoard.GetValidMoves(Player : integer; var moves : TMoveArray; ViolentO
     CaptureMoves := AllMoves and OpponentPegs and DefendCheckMask;
     while CaptureMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(CaptureMoves);
-      Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Queen) shl 12) or (UInt64(GetPiece_asm(DestCell)) shl 16);
+      DestCell := PopLowBit(CaptureMoves);
+      Moves[result] := tempMov or (DestCell shl 6) or (UInt64(GetPiece_asm(DestCell)) shl 16);
       inc(result);
       end;
 
     QuietMoves := AllMoves and not AllPegs and BlockCheckMask;
     while QuietMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(QuietMoves);
-      Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Queen) shl 12);
+      DestCell := PopLowBit(QuietMoves);
+      Moves[result] := tempMov or (DestCell shl 6);
       inc(result);
       end;
     end;
@@ -1264,7 +1200,8 @@ function TBoard.GetValidMoves(Player : integer; var moves : TMoveArray; ViolentO
   SourcePegs := Rooks and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    sourceCell := PopLowBit_Alt(SourcePegs);
+    sourceCell := PopLowBit(SourcePegs);
+    tempMov := SourceCell or (UInt64(Rook) shl 12);
 
     AllMoves := RookAttack_asm(SourceCell);
     if PinnedPieces and (UInt64($1) shl sourceCell) <> 0 then
@@ -1273,16 +1210,16 @@ function TBoard.GetValidMoves(Player : integer; var moves : TMoveArray; ViolentO
     CaptureMoves := AllMoves and OpponentPegs and DefendCheckMask;
     while CaptureMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(CaptureMoves);
-      Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Rook) shl 12) or (UInt64(GetPiece_asm(DestCell)) shl 16);
+      DestCell := PopLowBit(CaptureMoves);
+      Moves[result] := tempMov or (DestCell shl 6) or (UInt64(GetPiece_asm(DestCell)) shl 16);
       inc(result);
       end;
 
     QuietMoves := AllMoves and not AllPegs and BlockCheckMask;
     while QuietMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(QuietMoves);
-      Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Rook) shl 12);
+      DestCell := PopLowBit(QuietMoves);
+      Moves[result] := tempMov or (DestCell shl 6);
       inc(result);
       end;
     end;
@@ -1291,7 +1228,8 @@ function TBoard.GetValidMoves(Player : integer; var moves : TMoveArray; ViolentO
   SourcePegs := Bishops and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    SourceCell := PopLowBit_Alt(SourcePegs);
+    SourceCell := PopLowBit(SourcePegs);
+    tempMov := SourceCell or (UInt64(Bishop) shl 12);
 
     AllMoves :=   BishopAttack_asm(SourceCell);
     if PinnedPieces and (UInt64($1) shl sourceCell) <> 0 then
@@ -1300,16 +1238,16 @@ function TBoard.GetValidMoves(Player : integer; var moves : TMoveArray; ViolentO
     CaptureMoves := AllMoves and OpponentPegs and DefendCheckMask;
     while CaptureMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(CaptureMoves);
-      Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Bishop) shl 12) or (UInt64(GetPiece_asm(DestCell)) shl 16);
+      DestCell := PopLowBit(CaptureMoves);
+      Moves[result] := tempMov or (DestCell shl 6) or (UInt64(GetPiece_asm(DestCell)) shl 16);
       inc(result);
       end;
 
     QuietMoves := AllMoves and not AllPegs and BlockCheckMask;
     while QuietMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(QuietMoves);
-      Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Bishop) shl 12);
+      DestCell := PopLowBit(QuietMoves);
+      Moves[result] := tempMov or (DestCell shl 6);
       inc(result);
       end;
     end;
@@ -1318,24 +1256,25 @@ function TBoard.GetValidMoves(Player : integer; var moves : TMoveArray; ViolentO
   SourcePegs := Knights and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    sourceCell := PopLowBit_Alt(SourcePegs);
+    sourceCell := PopLowBit(SourcePegs);
     if PinnedPieces and (UInt64($1) shl sourceCell) = 0 then    // can only move knight if not pinned
       begin
+      tempMov := SourceCell or (UInt64(Knight) shl 12);
       AllMoves :=  KnightMask[SourceCell];
 
       CaptureMoves := AllMoves and OpponentPegs and DefendCheckMask;
       while CaptureMoves <> 0 do
         begin
-        DestCell := PopLowBit_Alt(CaptureMoves);
-        Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Knight) shl 12) or (UInt64(GetPiece_asm(DestCell)) shl 16);
+        DestCell := PopLowBit(CaptureMoves);
+        Moves[result] := tempMov or (DestCell shl 6) or (UInt64(GetPiece_asm(DestCell)) shl 16);
         inc(result);
         end;
 
-      QuietMoves := AllMoves and not (AllPegs) and BlockCheckMask;
+      QuietMoves := AllMoves and (not AllPegs) and BlockCheckMask;
       while QuietMoves <> 0 do
         begin
-        DestCell := PopLowBit_Alt(QuietMoves);
-        Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Knight) shl 12);
+        DestCell := PopLowBit(QuietMoves);
+        Moves[result] := tempMov or (DestCell shl 6);
         inc(result);
         end;
       end;
@@ -1345,22 +1284,23 @@ function TBoard.GetValidMoves(Player : integer; var moves : TMoveArray; ViolentO
   if InCheckFlag = false then
     begin
     SourcePegs := Kings and PlayerPegs;
-    SourceCell := PopLowBit_Alt(SourcePegs);
+    SourceCell := PopLowBit(SourcePegs);
+    tempMov := SourceCell or (UInt64(King) shl 12);
 
     KingMoves(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);
 
     while CaptureMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(CaptureMoves);
-      Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(King) shl 12) or (UInt64(GetPiece_asm(DestCell)) shl 16);
+      DestCell := PopLowBit(CaptureMoves);
+      Moves[result] := tempMov or (DestCell shl 6) or (UInt64(GetPiece_asm(DestCell)) shl 16);
       inc(result);
       end;
 
     QuietMoves := QuietMoves and BlockCheckMask;
     while QuietMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(QuietMoves);
-      Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(King) shl 12);
+      DestCell := PopLowBit(QuietMoves);
+      Moves[result] := tempMov or (DestCell shl 6);
       inc(result);
       end;
     end;
@@ -1369,8 +1309,9 @@ function TBoard.GetValidMoves(Player : integer; var moves : TMoveArray; ViolentO
   SourcePegs := Pawns and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    SourceCell := PopLowBit_Alt(SourcePegs);
+    SourceCell := PopLowBit(SourcePegs);
     PawnMoves(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);
+
     if PinnedPieces and (UInt64($1) shl sourceCell) <> 0 then
       DiscardPinnedMoves(SourceCell, CaptureMoves, QuietMoves);
 
@@ -1398,7 +1339,7 @@ function TBoard.GetValidMoves(Player : integer; var moves : TMoveArray; ViolentO
     DestPeg := CaptureMoves and UInt64($FF000000000000FF);
     while DestPeg <> 0 do                        // Pawn Promotion with Capture
       begin
-      DestCell := PopLowBit_Alt(DestPeg);
+      DestCell := PopLowBit(DestPeg);
       temp := GetPiece_asm(DestCell);
       for i := 2 to 5 do                         // Generate all 4 alternative moves
         begin
@@ -1412,7 +1353,7 @@ function TBoard.GetValidMoves(Player : integer; var moves : TMoveArray; ViolentO
     while CaptureMoves <> 0 do
       begin
       MoveValidFlag := true;
-      DestCell := PopLowBit_Alt(CaptureMoves);
+      DestCell := PopLowBit(CaptureMoves);
       CapturedPiece := GetPiece_asm(DestCell);
 
       if CapturedPiece = 0 then            // handle enpassant capture
@@ -1432,7 +1373,7 @@ function TBoard.GetValidMoves(Player : integer; var moves : TMoveArray; ViolentO
     DestPeg := QuietMoves and UInt64($FF000000000000FF);
     if DestPeg <> 0 then                         // Pawn Promotion without Capture
       begin                                      // Generate all 4 alternative moves
-      DestCell := PopLowBit_Alt(DestPeg);
+      DestCell := PopLowBit(DestPeg);
       for i := Queen downto Knight do
         begin
         Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Pawn) shl 12) or (UInt64(i) shl 20);
@@ -1446,7 +1387,7 @@ function TBoard.GetValidMoves(Player : integer; var moves : TMoveArray; ViolentO
 
     while QuietMoves <> 0 do
       begin
-      DestCell := PopLowBit_Alt(QuietMoves);
+      DestCell := PopLowBit(QuietMoves);
       Moves[result] := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(Pawn) shl 12);
       inc(result);
       end;
@@ -1461,56 +1402,75 @@ function TBoard.GetValidMoves(Player : integer; var moves : TMoveArray; ViolentO
 
 function TBoard.GetCaptureMove(TargetCell : integer) : TMove;
   // return a move capturing a piece on the target cell by the lowest attacking piece; 0 if no capture possible
+  // used for SEE only - doesn't identify ep moves
 
   var
-    SourcePegs, PlayerPegs, QuietMoves, CaptureMoves, DefendCheckMask, BlockCheckMask, AllPegs : UInt64;
-    sourceCell, destCell, CapturedPiece : integer;
+    SourcePegs, PlayerPegs, CaptureMoves, DefendCheckMask, BlockCheckMask : UInt64;
+    sourceCell, CapturedPiece : integer;
     InCheckFlag : boolean;
     TargetPeg, PinnedPieces  : UInt64;
 
-  begin
-  AllPegs := WhitePegs or BlackPegs;
+  procedure Housekeeping;
+    begin
+    CapturedPiece := GetPiece_asm(TargetCell);
+    TargetPeg := (UInt64($1) shl TargetCell);
 
+    InCheckFlag := KingInCheck(ToPlay, DefendCheckMask, BlockCheckMask);
+
+    PinnedPieces := GetPinnedPegs(PlayerPegs);
+    end;
+
+  begin
   if ToPlay = White then
     PlayerPegs := WhitePegs
    else
     PlayerPegs := BlackPegs;
 
-  CapturedPiece := GetPiece_asm(TargetCell);
-  TargetPeg := (UInt64($1) shl TargetCell);
+  // King capture (SEE only): the king can take on TargetCell only if it is adjacent to an
+  // enemy piece there and TargetCell is not defended once the king is lifted off its square.
 
-  InCheckFlag := KingInCheck(ToPlay, DefendCheckMask, BlockCheckMask);
-  if InCheckFlag = true then
+  if (KingMask[TargetCell] and Kings and PlayerPegs) <> 0 then
     begin
-    SourceCell := GetLowBit_Alt(Kings and PlayerPegs);
-    KingMoves_InCheck(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);    // Get king moves
+    TargetPeg := UInt64($1) shl TargetCell;
 
-    CaptureMoves := CaptureMoves and TargetPeg;
+    SourceCell := GetLowBit(Kings and PlayerPegs);
+    SourcePegs := UInt64($1) shl SourceCell;                                     // king square, reused as scratch
 
-    while CaptureMoves <> 0 do
+    Kings := Kings xor SourcePegs;                                               // lift the king so an attacker along the approach ray is seen
+    if ToPlay = White then
+      WhitePegs := WhitePegs xor SourcePegs
+     else
+      BlackPegs := BlackPegs xor SourcePegs;
+
+    InCheckFlag := CellAttacked(ToPlay, TargetCell);                             // reused as scratch: is the destination defended?
+
+    Kings := Kings xor SourcePegs;                                               // put the king back
+    if ToPlay = White then
+      WhitePegs := WhitePegs xor SourcePegs
+     else
+      BlackPegs := BlackPegs xor SourcePegs;
+
+    if not InCheckFlag then
       begin
-      DestCell := PopLowBit_Alt(CaptureMoves);
-      result := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(King) shl 12) or (UInt64(CapturedPiece) shl 16);
-      exit(result);
+      CapturedPiece := GetPiece_asm(TargetCell);
+      exit(UInt64(SourceCell) or (UInt64(TargetCell) shl 6) or (UInt64(King) shl 12) or (UInt64(CapturedPiece) shl 16));
       end;
-    end
-   else
-    DefendCheckMask := UInt64($FFFFFFFFFFFFFFFF);
 
-  // find pin information
-
-  PinnedPieces := GetPinnedPegs(PlayerPegs);
-
-  // try pawn first
+    end;
 
   if PlayerPegs = WhitePegs then
     SourcePegs := Pawns and PlayerPegs and BlackPawnCaptures[TargetCell]
    else
     SourcePegs := Pawns and PlayerPegs and WhitePawnCaptures[TargetCell];
 
-  while SourcePegs <> 0 do
+  if SourcePegs <> 0 then
     begin
-    SourceCell := PopLowBit_Alt(SourcePegs);
+    Housekeeping;
+
+    if (InCheckFlag = true) and (BitCount(DefendCheckMask) > 1) then     // This is double check, therefore the only legal moves are king moves
+      exit(0);
+
+    SourceCell := PopLowBit(SourcePegs);
     CaptureMoves := TargetPeg and DefendCheckMask;
 
     if PinnedPieces and (UInt64($1) shl sourceCell) <> 0 then
@@ -1531,9 +1491,14 @@ function TBoard.GetCaptureMove(TargetCell : integer) : TMove;
 
 
   SourcePegs := Knights and PlayerPegs and KnightMask[TargetCell];
-  while SourcePegs <> 0 do
+  if SourcePegs <> 0 then
     begin
-    sourceCell := PopLowBit_Alt(SourcePegs);
+    Housekeeping;
+
+    if (InCheckFlag = true) and (BitCount(DefendCheckMask) > 1) then     // This is double check, therefore the only legal moves are king moves
+      exit(0);
+
+    sourceCell := PopLowBit(SourcePegs);
     if PinnedPieces and (UInt64($1) shl sourceCell) = 0 then    // can only move knight if not pinned
       begin
       if  (DefendCheckMask and TargetPeg) <> 0 then
@@ -1545,9 +1510,14 @@ function TBoard.GetCaptureMove(TargetCell : integer) : TMove;
     end;
 
   SourcePegs := Bishops and PlayerPegs and BishopAttack_asm(TargetCell);
-  while SourcePegs <> 0 do
+  if SourcePegs <> 0 then
     begin
-    SourceCell := PopLowBit_Alt(SourcePegs);
+    Housekeeping;
+
+    if (InCheckFlag = true) and (BitCount(DefendCheckMask) > 1) then     // This is double check, therefore the only legal moves are king moves
+      exit(0);
+
+    SourceCell := PopLowBit(SourcePegs);
     CaptureMoves := TargetPeg and DefendCheckMask;
 
     if PinnedPieces and (UInt64($1) shl sourceCell) <> 0 then
@@ -1561,9 +1531,14 @@ function TBoard.GetCaptureMove(TargetCell : integer) : TMove;
     end;
 
   SourcePegs := Rooks and PlayerPegs and RookAttack_asm(TargetCell);
-  while SourcePegs <> 0 do
+  if SourcePegs <> 0 then
     begin
-    sourceCell := PopLowBit_Alt(SourcePegs);
+    Housekeeping;
+
+    if (InCheckFlag = true) and (BitCount(DefendCheckMask) > 1) then     // This is double check, therefore the only legal moves are king moves
+      exit(0);
+
+    sourceCell := PopLowBit(SourcePegs);
     CaptureMoves := TargetPeg and DefendCheckMask;
 
     if PinnedPieces and (UInt64($1) shl sourceCell) <> 0 then
@@ -1577,9 +1552,14 @@ function TBoard.GetCaptureMove(TargetCell : integer) : TMove;
     end;
 
   SourcePegs := Queens and PlayerPegs and (BishopAttack_asm(TargetCell) or RookAttack_asm(TargetCell));
-  while SourcePegs <> 0 do
+  if SourcePegs <> 0 then
     begin
-    SourceCell := PopLowBit_Alt(SourcePegs);
+    Housekeeping;
+
+    if (InCheckFlag = true) and (BitCount(DefendCheckMask) > 1) then     // This is double check, therefore the only legal moves are king moves
+      exit(0);
+
+    SourceCell := PopLowBit(SourcePegs);
     CaptureMoves := TargetPeg and DefendCheckMask;
 
     if PinnedPieces and (UInt64($1) shl sourceCell) <> 0 then
@@ -1588,25 +1568,6 @@ function TBoard.GetCaptureMove(TargetCell : integer) : TMove;
     if CaptureMoves <> 0 then
       begin
       result := UInt64(SourceCell) or (UInt64(TargetCell) shl 6) or (UInt64(Queen) shl 12) or (CapturedPiece shl 16);
-      exit(result);
-      end;
-    end;
-
-
-  // try king moves last
-
-  if InCheckFlag = false then
-    begin
-    SourcePegs := Kings and PlayerPegs;
-    SourceCell := PopLowBit_Alt(SourcePegs);
-
-    KingMoves(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);
-    CaptureMoves := CaptureMoves and TargetPeg;
-
-    if CaptureMoves <> 0 then
-      begin
-      DestCell := PopLowBit_Alt(CaptureMoves);
-      result := UInt64(SourceCell) or (UInt64(DestCell) shl 6) or (UInt64(King) shl 12) or (UInt64(CapturedPiece) shl 16);
       exit(result);
       end;
     end;
@@ -1632,7 +1593,7 @@ function TBoard.MoveExists(var InCheck : boolean) : boolean;
   InCheck := KingInCheck(ToPlay, DefendCheckMask, BlockCheckMask);
   if InCheck = true then
     begin
-    SourceCell := GetLowBit_Alt(Kings and PlayerPegs);
+    SourceCell := GetLowBit(Kings and PlayerPegs);
     KingMoves_InCheck(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);    // Get king moves
 
     if CaptureMoves <> 0 then
@@ -1657,7 +1618,7 @@ function TBoard.MoveExists(var InCheck : boolean) : boolean;
   SourcePegs := Knights and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    sourceCell := PopLowBit_Alt(SourcePegs);
+    sourceCell := PopLowBit(SourcePegs);
     AllMoves :=  KnightMask[SourceCell] and not PlayerPegs;
 
     if PinnedPieces and (UInt64($1) shl sourceCell) = 0 then    // can only move knight if not pinned
@@ -1669,7 +1630,7 @@ function TBoard.MoveExists(var InCheck : boolean) : boolean;
   SourcePegs := Pawns and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    SourceCell := PopLowBit_Alt(SourcePegs);
+    SourceCell := PopLowBit(SourcePegs);
     PawnMoves(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);
 
     if PinnedPieces and (UInt64($1) shl sourceCell) <> 0 then
@@ -1699,7 +1660,7 @@ function TBoard.MoveExists(var InCheck : boolean) : boolean;
     while CaptureMoves <> 0 do
       begin
       MoveValidFlag := true;
-      DestCell := PopLowBit_Alt(CaptureMoves);
+      DestCell := PopLowBit(CaptureMoves);
       CapturedPiece := GetPiece_asm(DestCell);
 
       if CapturedPiece = 0 then            // handle enpassant capture
@@ -1717,7 +1678,7 @@ function TBoard.MoveExists(var InCheck : boolean) : boolean;
   SourcePegs := Rooks and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    sourceCell := PopLowBit_Alt(SourcePegs);
+    sourceCell := PopLowBit(SourcePegs);
     AllMoves := RookAttack_asm(SourceCell) and not PlayerPegs;
 
     if PinnedPieces and (UInt64($1) shl sourceCell) <> 0 then
@@ -1730,7 +1691,7 @@ function TBoard.MoveExists(var InCheck : boolean) : boolean;
   SourcePegs := Bishops and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    SourceCell := PopLowBit_Alt(SourcePegs);
+    SourceCell := PopLowBit(SourcePegs);
     AllMoves := BishopAttack_asm(SourceCell) and not PlayerPegs;
 
     if PinnedPieces and (UInt64($1) shl sourceCell) <> 0 then
@@ -1743,7 +1704,7 @@ function TBoard.MoveExists(var InCheck : boolean) : boolean;
   SourcePegs := Queens and PlayerPegs;
   while SourcePegs <> 0 do
     begin
-    SourceCell := PopLowBit_Alt(SourcePegs);
+    SourceCell := PopLowBit(SourcePegs);
     AllMoves := (RookAttack_asm(SourceCell) or BishopAttack_asm(SourceCell)) and not PlayerPegs;
 
     if PinnedPieces and (UInt64($1) shl sourceCell) <> 0 then
@@ -1755,7 +1716,7 @@ function TBoard.MoveExists(var InCheck : boolean) : boolean;
 
   if InCheck = false then
     begin
-    SourceCell := GetLowBit_Alt(Kings and PlayerPegs);
+    SourceCell := GetLowBit(Kings and PlayerPegs);
     KingMoves(SourceCell, PlayerPegs, CaptureMoves, QuietMoves);
 
     if CaptureMoves <> 0 then
@@ -1779,18 +1740,18 @@ function TBoard.GetPinnedPegs(PlayerPegs : UInt64) : UInt64;
   result := 0;
   Opponent := (WhitePegs or BlackPegs) xor PlayerPegs;
 
-  KingCell := GetLowBit_Alt(Kings and PlayerPegs);
+  KingCell := GetLowBit(Kings and PlayerPegs);
   Pinners := RookMask[KingCell] and (Rooks or Queens) and Opponent;
   while Pinners <> 0 do
     begin
-    Source := PopLowBit_Alt(Pinners);
+    Source := PopLowBit(Pinners);
     result := result or (RookAttack_asm(source) and RookAttack_asm(KingCell));
     end;
 
   Pinners := BishopMask[KingCell] and (Bishops or Queens) and Opponent;
   while Pinners <> 0 do
     begin
-    Source := PopLowBit_Alt(Pinners);
+    Source := PopLowBit(Pinners);
     result := result or (BishopAttack_asm(source) and BishopAttack_asm(KingCell));
     end;
   end;
@@ -1824,7 +1785,7 @@ procedure TBoard.DiscardPinnedMoves(CellIndex : integer; var CaptureMoves, Quiet
 
   // 2) get pinner and attacked cells
 
-  KingCell := GetLowBit_Alt(Kings and PlayerPegs);
+  KingCell := GetLowBit(Kings and PlayerPegs);
 
   ValidMoves := UInt64($FFFFFFFFFFFFFFFF);
 
@@ -1832,7 +1793,7 @@ procedure TBoard.DiscardPinnedMoves(CellIndex : integer; var CaptureMoves, Quiet
   Pinners := tempPegs and (Rooks or Queens) and OpponentPegs;
   while Pinners <> 0 do
     begin
-    Source := PopLowBit_Alt(Pinners);
+    Source := PopLowBit(Pinners);
     tempPegs2 := RookAttack_asm(Source);
     if (CellPeg and tempPegs2) <> 0 then
       ValidMoves := ValidMoves and ((UInt64($1) shl source) or (tempPegs2 and tempPegs));
@@ -1842,7 +1803,7 @@ procedure TBoard.DiscardPinnedMoves(CellIndex : integer; var CaptureMoves, Quiet
   Pinners := tempPegs and (Bishops or Queens) and OpponentPegs;
   while Pinners <> 0 do
     begin
-    Source := PopLowBit_Alt(Pinners);
+    Source := PopLowBit(Pinners);
     tempPegs2 := BishopAttack_asm(Source);
     if (CellPeg and tempPegs2) <> 0 then
       ValidMoves := ValidMoves and ((UInt64($1) shl source) or (tempPegs2 and tempPegs));
@@ -1890,7 +1851,7 @@ function TBoard.NonPinnedMoves(CellIndex : integer) : UInt64;
 
   // 2) get pinner and attacked cells
 
-  KingCell := GetLowBit_Alt(Kings and PlayerPegs);
+  KingCell := GetLowBit(Kings and PlayerPegs);
 
   Result := UInt64($FFFFFFFFFFFFFFFF);
 
@@ -1898,7 +1859,7 @@ function TBoard.NonPinnedMoves(CellIndex : integer) : UInt64;
   Pinners := tempPegs and (Rooks or Queens) and OpponentPegs;
   while Pinners <> 0 do
     begin
-    Source := PopLowBit_Alt(Pinners);
+    Source := PopLowBit(Pinners);
     tempPegs2 := RookAttack_asm(Source);
     if (CellPeg and tempPegs2) <> 0 then
       Result := Result and ((UInt64($1) shl source) or (tempPegs2 and tempPegs));
@@ -1908,7 +1869,7 @@ function TBoard.NonPinnedMoves(CellIndex : integer) : UInt64;
   Pinners := tempPegs and (Bishops or Queens) and OpponentPegs;
   while Pinners <> 0 do
     begin
-    Source := PopLowBit_Alt(Pinners);
+    Source := PopLowBit(Pinners);
     tempPegs2 := BishopAttack_asm(Source);
     if (CellPeg and tempPegs2) <> 0 then
       Result := Result and ((UInt64($1) shl source) or (tempPegs2 and tempPegs));
@@ -1926,28 +1887,16 @@ function TBoard.NonPinnedMoves(CellIndex : integer) : UInt64;
 function TBoard.MakeMove(var Move : UInt64) : boolean;
   var
     sourcePeg, DestPeg, tempPeg, CastleFlags : UInt64;
-    Source, Dest, tempDest, Piece, CapturedPiece, PromotionPiece, epCell, Old_epCell : integer;
+    Source, Dest, tempDest, Piece, CapturedPiece, PromotionPiece, epCell, Old_epCell : NativeInt;
 
   begin
-  Move := Move and $FFFFFF;  // important to clear move ordering value
-
-  {$IfDef DEBUG}             //  uses record helper with error checking
-
-  Source := Move.Source;
-  Dest := Move.Dest;
-  Piece := Move.Piece;
-  CapturedPiece := Move.CapturedPiece;
-  PromotionPiece := Move.PromotionPiece;
-
-  {$Else}
-
-  Source :=  Move and $3F;          // Faster code
+  Move := Move and $FFFFF00000FFFFFF;   // clear bits used to save castle, ep & Halfcount data
+ 
+  Source :=  Move and $3F;
   Dest :=  (Move shr 6) and $3F;
   Piece := (Move shr 12) and $F;
   CapturedPiece := (Move shr 16) and $F;
   PromotionPiece := (Move shr 20) and $F;
-
-  {$EndIf}
 
   SourcePeg := UInt64($1) shl Source;
   DestPeg := UInt64($1) shl Dest;
@@ -1957,7 +1906,7 @@ function TBoard.MakeMove(var Move : UInt64) : boolean;
   CastleFlags := PEXT(MovedPieces, UInt64($9100000000000091));
   if Enpassant <> 0 then
     begin
-    Old_epCell := GetLowBit_Alt(Enpassant);
+    Old_epCell := GetLowBit(Enpassant);
     Hash := Hash xor epHash[Old_epCell];             // remove old epCell from Hash
     Move := Move or (CastleFlags shl 24) or (UInt64(Old_epCell) shl 30) or (UInt64(HalfCount) shl 36);
     end
@@ -2051,6 +2000,8 @@ function TBoard.MakeMove(var Move : UInt64) : boolean;
                 end;
               HalfCount := 0;
               end;
+      else
+       exit(false);    //  exit gracefully if no piece on source square
     end;
 
   if ToPlay = White then
@@ -2159,23 +2110,11 @@ function TBoard.MakeMoveNoHash(var Move : UInt64) : boolean;
   begin
   Move := Move and $FFFFFF;  // important to clear move ordering value
 
-  {$IfDef DEBUG}             //  uses record helper with error checking
-
-  Source := Move.Source;
-  Dest := Move.Dest;
-  Piece := Move.Piece;
-  CapturedPiece := Move.CapturedPiece;
-  PromotionPiece := Move.PromotionPiece;
-
-  {$Else}
-
-  Source :=  Move and $3F;          // Faster code
+  Source :=  Move and $3F;
   Dest :=  (Move shr 6) and $3F;
   Piece := (Move shr 12) and $F;
   CapturedPiece := (Move shr 16) and $F;
   PromotionPiece := (Move shr 20) and $F;
-
-  {$EndIf}
 
   SourcePeg := UInt64($1) shl Source;
   DestPeg := UInt64($1) shl Dest;
@@ -2185,7 +2124,7 @@ function TBoard.MakeMoveNoHash(var Move : UInt64) : boolean;
   CastleFlags := PEXT(MovedPieces, UInt64($9100000000000091));
   if Enpassant <> 0 then
     begin
-    Old_epCell := GetLowBit_Alt(Enpassant);
+    Old_epCell := GetLowBit(Enpassant);
     Move := Move or (CastleFlags shl 24) or (UInt64(Old_epCell) shl 30) or (UInt64(HalfCount) shl 36);
     end
    else
@@ -2327,6 +2266,64 @@ function TBoard.MakeMoveNoHash(var Move : UInt64) : boolean;
   end;
 
 
+function TBoard.MakeCaptureSEE(Move: UInt64): boolean;
+  var
+    SourcePeg, DestPeg: UInt64;
+    Source, Dest, Piece, CapturedPiece, PromotionPiece: integer;
+
+  begin
+  Source         :=  Move and $3F;
+  Dest           := (Move shr 6)  and $3F;
+  Piece          := (Move shr 12) and $F;
+  CapturedPiece  := (Move shr 16) and $F;
+  PromotionPiece := (Move shr 20) and $F;
+  SourcePeg := UInt64(1) shl Source;
+  DestPeg   := UInt64(1) shl Dest;
+
+  case CapturedPiece of          // remove victim from Dest
+    Queen:  Queens  := Queens  xor DestPeg;
+    Rook:   Rooks   := Rooks   xor DestPeg;
+    Bishop: Bishops := Bishops xor DestPeg;
+    Knight: Knights := Knights xor DestPeg;
+    Pawn:   Pawns   := Pawns   xor DestPeg;
+  end;
+
+  if PromotionPiece = 0 then     // move attacker Source->Dest
+    case Piece of
+      King:   Kings   := Kings   xor SourcePeg xor DestPeg;
+      Queen:  Queens  := Queens  xor SourcePeg xor DestPeg;
+      Rook:   Rooks   := Rooks   xor SourcePeg xor DestPeg;
+      Bishop: Bishops := Bishops xor SourcePeg xor DestPeg;
+      Knight: Knights := Knights xor SourcePeg xor DestPeg;
+      Pawn:   Pawns   := Pawns   xor SourcePeg xor DestPeg;
+    end
+  else
+    begin
+    Pawns := Pawns xor SourcePeg;
+      case PromotionPiece of
+      Queen:  Queens  := Queens  xor DestPeg;
+      Rook:   Rooks   := Rooks   xor DestPeg;
+      Bishop: Bishops := Bishops xor DestPeg;
+      Knight: Knights := Knights xor DestPeg;
+      end;
+    end;
+
+  if ToPlay = White then
+    begin
+    WhitePegs := WhitePegs xor SourcePeg xor DestPeg;
+    BlackPegs := BlackPegs xor DestPeg;
+    end
+  else
+    begin
+    BlackPegs := BlackPegs xor SourcePeg xor DestPeg;
+    WhitePegs := WhitePegs xor DestPeg;
+    end;
+
+  ToPlay := 1 - ToPlay;
+  result := true;
+  end;
+
+
 function TBoard.GetMoveHash(var Move : UInt64) : UInt64;
   var
     sourcePeg, DestPeg, tempPeg, CastleFlags, TempMovedPieces : UInt64;
@@ -2336,25 +2333,11 @@ function TBoard.GetMoveHash(var Move : UInt64) : UInt64;
   result := Hash;
   TempMovedPieces := MovedPieces;
 
-//  Move := Move and $FFFFFF;  // important to clear move ordering value
-
-  {$IfDef DEBUG}             //  uses record helper with error checking
-
-  Source := Move.Source;
-  Dest := Move.Dest;
-  Piece := Move.Piece;
-  CapturedPiece := Move.CapturedPiece;
-  PromotionPiece := Move.PromotionPiece;
-
-  {$Else}
-
   Source :=  Move and $3F;
   Dest :=  (Move shr 6) and $3F;
   Piece := (Move shr 12) and $F;
   CapturedPiece := (Move shr 16) and $F;
   PromotionPiece := (Move shr 20) and $F;
-
-  {$EndIf}
 
   SourcePeg := UInt64($1) shl Source;
   DestPeg := UInt64($1) shl Dest;
@@ -2364,7 +2347,7 @@ function TBoard.GetMoveHash(var Move : UInt64) : UInt64;
   CastleFlags := PEXT(TempMovedPieces, UInt64($9100000000000091));
   if Enpassant <> 0 then
     begin
-    Old_epCell := GetLowBit_Alt(Enpassant);
+    Old_epCell := GetLowBit(Enpassant);
     result := result xor epHash[Old_epCell];             // remove old epCell from Hash
     end;
 
@@ -2458,7 +2441,7 @@ function TBoard.GetMoveHash(var Move : UInt64) : UInt64;
 function TBoard.UndoMove(const Move : UInt64) : boolean;
   var
     sourcePeg, DestPeg, tempPeg, CastleFlags : UInt64;
-    Source, Dest, tempDest, Piece, CapturedPiece, PromotionPiece, epCell : integer;
+    Source, Dest, tempDest, Piece, CapturedPiece, PromotionPiece, epCell : NativeInt;
 
   begin
   Source := Move and $3F;
@@ -2478,7 +2461,7 @@ function TBoard.UndoMove(const Move : UInt64) : boolean;
 
   if Enpassant <> 0 then
     begin
-    epCell := GetLowBit_Alt(Enpassant);
+    epCell := GetLowBit(Enpassant);
     Hash := Hash xor epHash[epCell];             // remove last epCell from Hash
     end;
 
@@ -2805,13 +2788,13 @@ function TBoard.KingInCheck(Player : integer; var CheckCaptureMask, CheckBlockMa
   if Player = White then
     begin
     Opponent := BlackPegs;
-    Cell := GetLowBit_Alt(Kings and WhitePegs);
+    Cell := GetLowBit(Kings and WhitePegs);
     CheckCaptureMask := WhitePawnCaptures[Cell] and Pawns and Opponent;
     end
    else
     begin
     Opponent := WhitePegs;
-    Cell := GetLowBit_Alt(Kings and BlackPegs);
+    Cell := GetLowBit(Kings and BlackPegs);
     CheckCaptureMask := BlackPawnCaptures[Cell] and Pawns and Opponent;
     end;
 
@@ -2820,7 +2803,7 @@ function TBoard.KingInCheck(Player : integer; var CheckCaptureMask, CheckBlockMa
   RookBlock := 0;
   if RookCapture <> 0 then
     begin
-    RookBlock := RookAttack_asm(GetLowBit_Alt(RookCapture)) and tempPegs;
+    RookBlock := RookAttack_asm(GetLowBit(RookCapture)) and tempPegs;
     CheckCaptureMask := CheckCaptureMask or RookCapture;
     end;
 
@@ -2829,7 +2812,7 @@ function TBoard.KingInCheck(Player : integer; var CheckCaptureMask, CheckBlockMa
   BishopBlock := 0;
   if BishopCapture <> 0 then
     begin
-    BishopBlock := BishopAttack_asm(GetLowBit_Alt(BishopCapture)) and tempPegs;
+    BishopBlock := BishopAttack_asm(GetLowBit(BishopCapture)) and tempPegs;
     CheckCaptureMask := CheckCaptureMask or BishopCapture;
     end;
 
@@ -2855,12 +2838,12 @@ function TBoard.KingInCheck(Player : integer) : boolean;
   if Player = White then
     begin
     Opponent := BlackPegs;
-    KingCell := GetLowBit_Alt(Kings and WhitePegs);
+    KingCell := GetLowBit(Kings and WhitePegs);
     end
    else
     begin
     Opponent := WhitePegs;
-    KingCell := GetLowBit_Alt(Kings and BlackPegs);
+    KingCell := GetLowBit(Kings and BlackPegs);
     end;
 
   if RookAttack_asm(KingCell) and (Rooks or Queens) and Opponent <> 0 then
@@ -2883,8 +2866,24 @@ function TBoard.AdjacentKings : boolean;
     KingCell : integer;
 
   begin
-  KingCell := GetLowBit_Alt(Kings and WhitePegs);
-  result := KingMask[KingCell] and Kings and BlackPegs <> 0
+  KingCell := GetLowBit(Kings and WhitePegs);
+  result := (KingMask[KingCell] and Kings and BlackPegs) <> 0;
+  end;
+
+
+function TBoard.IsMoveValid(Move : TMove) : boolean;
+  var
+    ValidMoveList : TMoveArray;
+    MoveCount : integer;
+    i : integer;
+
+  begin
+  result := false;
+
+  MoveCount := GetValidMoves(ToPlay, ValidMoveList, False);
+  for i := 1 to MoveCount do
+    if (ValidMoveList[i] and $FFFFFF) = (Move and $FFFFFF) then
+      exit(true);
   end;
 
 
@@ -2942,16 +2941,18 @@ function TBoard.OnlyPawns : boolean;
 
 function TBoard.InsufficientMaterial : boolean;
   begin
-  if bitcount(WhitePegs or BlackPegs) = 2 then            // K v k
-    exit(true);
-
-  if bitcount(pawns or rooks or queens) > 0 then
+  if bitcount(pawns or rooks) > 0 then       // win is posible
     exit(false);
 
-  if bitcount(knights or bishops) < 2 then
+  // both sides have at most one minor : forced win is not possible
+
+  if (bitcount(whitepegs) < 3) and (bitcount(blackpegs) < 3) then
     exit(true);
 
-  if (bitcount(bishops) = 0) and (bitcount(knights) = 2) then
+  // no bishops and each side has at most two knights : forced win is not possible
+  // covers K + N + N vs K + N  & K + N + N vs K + N + N
+
+  if (bitcount(bishops) = 0) and (bitcount(whitepegs and knights) < 3) and (bitcount(blackpegs and knights) < 3) then
     exit(true);
 
   result := false;
@@ -2998,18 +2999,15 @@ function TBoard.SEE(Move : TMove) : integer;
   begin
   Dest := (Move shr 6) and $3F;
 
-  if not CellAttacked(1-ToPlay, Dest) then
-    exit(0);
-
   NextCapture := GetCaptureMove(Dest);
 
   if NextCapture = 0 then
     exit(0);
 
-  MakeMoveNoHash(NextCapture);
-
   CapturedPiece := (NextCapture shr 16) and $F;
   PromotionPiece := (NextCapture shr 20) and $F;
+
+  MakeCaptureSEE(NextCapture);
 
   result := PieceValue[CapturedPiece] - SEE(NextCapture);
 
@@ -3017,8 +3015,24 @@ function TBoard.SEE(Move : TMove) : integer;
     result := result + PieceValue[PromotionPiece] - PieceValue[Pawn];
 
   result := max(0, result);
+  end;
 
-  UndoMoveNoHash(NextCapture);
+
+function TBoard.MaterialValue(Player : integer) : integer;
+  var
+    PlayerPegs : UInt64;
+
+  begin
+  if Player = White then
+    PlayerPegs := WhitePegs
+   else
+    PlayerPegs := BlackPegs;
+
+  result := bitcount(PlayerPegs and Queens) * 87;
+  result := result + bitcount(PlayerPegs and Rooks) * 47;
+  result := result + bitcount(PlayerPegs and Bishops) * 30;
+  result := result + bitcount(PlayerPegs and Knights) * 29;
+  result := result + bitcount(PlayerPegs and Pawns) * 9;
   end;
 
 
@@ -3044,7 +3058,7 @@ function TBoard.EnpassantLegal(ToPlay : integer; Dest, Source : UInt64) : boolea
       WhitePegs := WhitePegs xor SourcePeg;
       BlackPegs := BlackPegs xor (DestPeg shl 8);
 
-      KingCell := GetLowBit_Alt(KingPeg);
+      KingCell := GetLowBit(KingPeg);
       tempPegs := RookAttack_asm(KingCell);
       if (tempPegs and (Rooks or Queens) and BlackPegs) <> 0 then
         result := false;
@@ -3066,7 +3080,7 @@ function TBoard.EnpassantLegal(ToPlay : integer; Dest, Source : UInt64) : boolea
       BlackPegs := BlackPegs xor SourcePeg;
       WhitePegs := WhitePegs xor (DestPeg shr 8);
 
-      KingCell := GetLowBit_Alt(KingPeg);
+      KingCell := GetLowBit(KingPeg);
       tempPegs := RookAttack_asm(KingCell);
       if (tempPegs and (Rooks or Queens) and WhitePegs) <> 0 then
         result := false;
@@ -3100,7 +3114,6 @@ function TBoard.RookAttack(Cell : integer): UInt64;
 
 function TBoard.RookAttack_asm(Cell : integer): UInt64;
   asm
-  .ALIGN 16
   .PUSHNV r12
 
   mov r8, Self.WhitePegs                      //  r8 =>     AllPegs := WhitePegs or BlackPegs;
@@ -3159,7 +3172,6 @@ function TBoard.BishopAttack(Cell : integer): UInt64;
 
 function TBoard.BishopAttack_asm(Cell : integer): UInt64;
   asm
-  .ALIGN 16
   .PUSHNV r12
 
   mov r8, Self.WhitePegs                      //  r8 =>     AllPegs := WhitePegs or BlackPegs;
@@ -3219,27 +3231,6 @@ function TBoard.PawnAttack(Cell : integer) : UInt64;
   result := (WhitePawnCaptures[Cell] and BlackPegs) or (BlackPawnCaptures[Cell] and WhitePegs);
   end;
 
-                            {
-procedure TBoard.RookMoves(Cell : integer; PlayerPegs : UInt64; var CaptureMoves, QuietMoves : UInt64);
-  var
-    Index : integer;
-    Mask, Moves : UInt64;
-
-  begin
-
-  Mask :=  RookHorzMask[Cell];
-  Index := PEXT(AllPegs, Mask);
-  Moves := PDEP(RookLookup[Cell and $7, Index], Mask);
-
-  Mask :=  RookVertMask[Cell];
-  Index := PEXT(AllPegs, Mask);
-  Moves := Moves or PDEP(RookLookup[Cell shr 3, Index], Mask);
-
-  QuietMoves := Moves and not AllPegs;
-  CaptureMoves := Moves and (AllPegs xor PlayerPegs);
-
-  end;       }
-
 
 procedure TBoard.RookMoves(Cell : integer; PlayerPegs : UInt64; var CaptureMoves, QuietMoves : UInt64);
   var
@@ -3248,31 +3239,10 @@ procedure TBoard.RookMoves(Cell : integer; PlayerPegs : UInt64; var CaptureMoves
   begin
   AllPegs := WhitePegs or BlackPegs;
   Moves :=   RookAttack_asm(Cell);
+
   QuietMoves := Moves and not AllPegs;
   CaptureMoves := Moves and (AllPegs xor PlayerPegs);
   end;
-
-
-     {
-procedure TBoard.BishopMoves(Cell : integer; PlayerPegs : UInt64; var CaptureMoves, QuietMoves : UInt64);
-  var
-    Index : integer;
-    Mask, Moves : UInt64;
-
-  begin
-
-  Mask :=  BishopUpMask[Cell];
-  Index := PEXT(AllPegs, Mask);
-  Moves := PDEP(BishopUpLookup[Cell, Index], Mask);
-
-  Mask :=  BishopDownMask[Cell];
-  Index := PEXT(AllPegs, Mask);
-  Moves := Moves or PDEP(BishopDownLookup[Cell, Index], Mask);
-
-  QuietMoves := Moves and not AllPegs;
-  CaptureMoves := Moves and (AllPegs xor PlayerPegs);
-
-  end;      }
 
 
 procedure TBoard.BishopMoves(Cell : integer; PlayerPegs : UInt64; var CaptureMoves, QuietMoves : UInt64);
@@ -3349,7 +3319,7 @@ procedure TBoard.KingMoves(Cell : integer; PlayerPegs : UInt64; var CaptureMoves
   tempPegs := QuietMoves;
   while tempPegs <> 0 do
     begin
-    Dest := PopLowBit_Alt(tempPegs);
+    Dest := PopLowBit(tempPegs);
     if CellAttacked(Player, Dest) then
       ClearBit(QuietMoves, Dest);
     end;
@@ -3357,7 +3327,7 @@ procedure TBoard.KingMoves(Cell : integer; PlayerPegs : UInt64; var CaptureMoves
   tempPegs := CaptureMoves;
   while tempPegs <> 0 do
     begin
-    Dest := PopLowBit_Alt(tempPegs);
+    Dest := PopLowBit(tempPegs);
     if CellAttacked(Player, Dest) then
       ClearBit(CaptureMoves, Dest);
     end;
@@ -3399,7 +3369,7 @@ procedure TBoard.KingMoves_InCheck(Cell : integer; PlayerPegs : UInt64; var Capt
   tempPegs := QuietMoves;
   while tempPegs <> 0 do
     begin
-    Dest := PopLowBit_Alt(tempPegs);
+    Dest := PopLowBit(tempPegs);
     if CellAttacked(Player, Dest) then
       ClearBit(QuietMoves, Dest);
     end;
@@ -3407,7 +3377,7 @@ procedure TBoard.KingMoves_InCheck(Cell : integer; PlayerPegs : UInt64; var Capt
   tempPegs := CaptureMoves;
   while tempPegs <> 0 do
     begin
-    Dest := PopLowBit_Alt(tempPegs);
+    Dest := PopLowBit(tempPegs);
     if CellAttacked(Player, Dest) then
       ClearBit(CaptureMoves, Dest);
     end;
@@ -3544,9 +3514,18 @@ procedure TBoard.ClearBoard;
   end;
 
 
+function TBoard.IsInitialized : boolean;
+  begin
+  if IsInitializedFlag[0] = -1 then
+    result := true
+   else
+    result := false;
+  end;
+
+
 procedure TBoard.Reset;
   begin
-  if IsInitialized[0] = 0 then
+  if IsInitializedFlag[0] = 0 then
     begin
     FillHashTables;
     MakeKnightMasks;
@@ -3557,7 +3536,7 @@ procedure TBoard.Reset;
     MakeRookLookUp;
     MakeBishopLookUp;
 
-    IsInitialized[0] := -1;
+    IsInitializedFlag[0] := -1;
     end;
 
   BoardFromFEN('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', Self);
@@ -3575,82 +3554,82 @@ procedure TBoard.CalcHash;
   // white pegs
 
   pegs := WhitePegs and Kings;
-  k := PopLowBit_Alt(pegs);
+  k := PopLowBit(pegs);
   Hash := Hash xor HashTable[White, King, k];
 
   pegs := WhitePegs and Queens;
-  if pegs <> 0 then
+  while pegs <> 0 do
     begin
-    k := PopLowBit_Alt(pegs);
+    k := PopLowBit(pegs);
     Hash := Hash xor HashTable[White, Queen, k];
     end;
 
   pegs := WhitePegs and Rooks;
   while pegs <> 0 do
     begin
-    k := PopLowBit_Alt(pegs);
+    k := PopLowBit(pegs);
     Hash := Hash xor HashTable[White, Rook, k];
     end;
 
   pegs := WhitePegs and Bishops;
   while pegs <> 0 do
     begin
-    k := PopLowBit_Alt(pegs);
+    k := PopLowBit(pegs);
     Hash := Hash xor HashTable[White, Bishop, k];
     end;
 
   pegs := WhitePegs and Knights;
   while pegs <> 0 do
     begin
-    k := PopLowBit_Alt(pegs);
+    k := PopLowBit(pegs);
     Hash := Hash xor HashTable[White, Knight, k];
     end;
 
   pegs := WhitePegs and Pawns;
   while pegs <> 0 do
     begin
-    k := PopLowBit_Alt(pegs);
+    k := PopLowBit(pegs);
     Hash := Hash xor HashTable[White, Pawn, k];
     end;
 
   // black pegs
 
   pegs := BlackPegs and Kings;
-  k := PopLowBit_Alt(pegs);
+  k := PopLowBit(pegs);
   Hash := Hash xor HashTable[Black, King, k];
 
   pegs := BlackPegs and Queens;
-  if pegs <> 0 then
+  while pegs <> 0 do
     begin
-    k := PopLowBit_Alt(pegs);
+    k := PopLowBit(pegs);
     Hash := Hash xor HashTable[Black, Queen, k];
     end;
 
   pegs := BlackPegs and Rooks;
   while pegs <> 0 do
     begin
-    k := PopLowBit_Alt(pegs);
+    k := PopLowBit(pegs);
     Hash := Hash xor HashTable[Black, Rook, k];
     end;
 
   pegs := BlackPegs and Bishops;
   while pegs <> 0 do
     begin
-    k := PopLowBit_Alt(pegs);
+    k := PopLowBit(pegs);
     Hash := Hash xor HashTable[Black, Bishop, k];
     end;
 
   pegs := BlackPegs and Knights;
   while pegs <> 0 do
     begin
-    k := PopLowBit_Alt(pegs);
+    k := PopLowBit(pegs);
     Hash := Hash xor HashTable[Black, Knight, k];
     end;
 
   pegs := BlackPegs and Pawns;
   while pegs <> 0 do
     begin
-    k := PopLowBit_Alt(pegs);
+    k := PopLowBit(pegs);
     Hash := Hash xor HashTable[Black, Pawn, k];
     end;
 
@@ -3662,7 +3641,7 @@ procedure TBoard.CalcHash;
 
   if Enpassant <> 0 then
     begin
-    epCell := GetLowBit_Alt(Enpassant);
+    epCell := GetLowBit(Enpassant);
     Hash := Hash xor epHash[epCell];             // add last epCell to Hash
     end;
   end;
@@ -3670,8 +3649,10 @@ procedure TBoard.CalcHash;
 
 procedure TBoard.FillHashTables;
   var
-    i, j, k : integer;
+    i, j, k, rights : integer;
     PRNG : TPRNG;
+    MovedBits, r : UInt64;
+    CastleRights : array[0..15] of UInt64;
 
   begin
   // PRNG_Randomize;
@@ -3684,14 +3665,49 @@ procedure TBoard.FillHashTables;
 
   TBoard.PlayerHash := PRNG.Rand64;
 
+  //for i := 0 to 63 do
+  //  TBoard.CastleHash[i] := PRNG.Rand64;
+
   for i := 0 to 63 do
-    TBoard.CastleHash[i] := PRNG.Rand64;
+    begin
+    r := PRNG.Rand64;
+    if i <= 15 then
+      CastleRights[i] := r;
+    end;
+
+  for i := 0 to 63 do
+    begin
+    MovedBits := PDEP(UInt64(i), UInt64($9100000000000091));
+    rights := 0;
+
+    if (MovedBits and (UInt64(1) shl 60)) = 0 then               // white king unmoved
+      begin
+      if (MovedBits and (UInt64(1) shl 63)) = 0 then
+        rights := rights or 1;                                   // h1 rook -> K
+      if (MovedBits and (UInt64(1) shl 56)) = 0 then
+        rights := rights or 2;                                   // a1 rook -> Q
+      end;
+
+    if (MovedBits and (UInt64(1) shl 4)) = 0 then                // black king unmoved
+      begin
+      if (MovedBits and (UInt64(1) shl 7)) = 0 then
+        rights := rights or 4;                                   // h8 rook -> k
+      if (MovedBits and (UInt64(1) shl 0)) = 0 then
+        rights := rights or 8;                                   // a8 rook -> q
+      end;
+
+    TBoard.CastleHash[i] := CastleRights[rights];
+    end;
+
 
   for i := 0 to 63 do
     TBoard.epHash[i] := PRNG.Rand64;
 
+  for i := 0 to HalfMoveReductionCutoff do
+    TBoard.HalfMoveHashTable[i] := 0;
 
-
+  for i := HalfMoveReductionCutoff + 1 to high(THalfMoveHashTable) do
+    TBoard.HalfMoveHashTable[i] := PRNG.Rand64;
   end;
 
 
@@ -4156,17 +4172,25 @@ procedure ValidateBoard(Board : TBoard);
   end;
 
 
-procedure BoardFromFEN(const FEN : string; var Board : TBoard);
+function BoardFromFEN(const FEN : string; var Board : TBoard) : boolean;
   var
   RankNo, FileNo, cursor, cell : integer;
   c : Char;
+  temp : integer;
   tempstr : string;
+  tempBoard : TBoard;
 
   label
     Last;
 
   begin
-  Board.ClearBoard;
+  if length(FEN) < 19 then            // 'K6k/8/8/8/8/8/8/8 w - - 0 1'
+    exit(false);
+
+  if tempBoard.IsInitialized = false then
+    tempBoard.Reset;
+
+  tempBoard.ClearBoard;
 
   // Piece postions
 
@@ -4175,21 +4199,28 @@ procedure BoardFromFEN(const FEN : string; var Board : TBoard);
   cursor := 1;
 
     repeat
+    if cursor > length(FEN) then
+      exit(false);
+
     c := Char(Fen[cursor]);
     cell := RankNo*8 + FileNo;
+
+    if (cell > 63) and CharInSet(c, ['K','Q','R','B','N','P','k','q','r','b','n','p']) then        // more than 64 squares described
+      exit(false);
+
       case c of
-      Char('K') :  begin SetBit(Board.Kings, cell); SetBit(Board.WhitePegs, cell); end;
-      Char('Q') :  begin SetBit(Board.Queens, cell); SetBit(Board.WhitePegs, cell); end;
-      Char('R') :  begin SetBit(Board.Rooks, cell); SetBit(Board.WhitePegs, cell); end;
-      Char('B') :  begin SetBit(Board.Bishops, cell); SetBit(Board.WhitePegs, cell); end;
-      Char('N') :  begin SetBit(Board.Knights, cell); SetBit(Board.WhitePegs, cell); end;
-      Char('P') :  begin SetBit(Board.Pawns, cell); SetBit(Board.WhitePegs, cell); end;
-      Char('k') :  begin SetBit(Board.Kings, cell); SetBit(Board.BlackPegs, cell); end;
-      Char('q') :  begin SetBit(Board.Queens, cell); SetBit(Board.BlackPegs, cell); end;
-      Char('r') :  begin SetBit(Board.Rooks, cell); SetBit(Board.BlackPegs, cell); end;
-      Char('b') :  begin SetBit(Board.Bishops, cell); SetBit(Board.BlackPegs, cell); end;
-      Char('n') :  begin SetBit(Board.Knights, cell); SetBit(Board.BlackPegs, cell); end;
-      Char('p') :  begin SetBit(Board.Pawns, cell); SetBit(Board.BlackPegs, cell); end;
+      Char('K') :  begin SetBit(tempBoard.Kings, cell); SetBit(tempBoard.WhitePegs, cell); end;
+      Char('Q') :  begin SetBit(tempBoard.Queens, cell); SetBit(tempBoard.WhitePegs, cell); end;
+      Char('R') :  begin SetBit(tempBoard.Rooks, cell); SetBit(tempBoard.WhitePegs, cell); end;
+      Char('B') :  begin SetBit(tempBoard.Bishops, cell); SetBit(tempBoard.WhitePegs, cell); end;
+      Char('N') :  begin SetBit(tempBoard.Knights, cell); SetBit(tempBoard.WhitePegs, cell); end;
+      Char('P') :  begin SetBit(tempBoard.Pawns, cell); SetBit(tempBoard.WhitePegs, cell); end;
+      Char('k') :  begin SetBit(tempBoard.Kings, cell); SetBit(tempBoard.BlackPegs, cell); end;
+      Char('q') :  begin SetBit(tempBoard.Queens, cell); SetBit(tempBoard.BlackPegs, cell); end;
+      Char('r') :  begin SetBit(tempBoard.Rooks, cell); SetBit(tempBoard.BlackPegs, cell); end;
+      Char('b') :  begin SetBit(tempBoard.Bishops, cell); SetBit(tempBoard.BlackPegs, cell); end;
+      Char('n') :  begin SetBit(tempBoard.Knights, cell); SetBit(tempBoard.BlackPegs, cell); end;
+      Char('p') :  begin SetBit(tempBoard.Pawns, cell); SetBit(tempBoard.BlackPegs, cell); end;
 
       Char('2') :  inc(FileNo, 1);
       Char('3') :  inc(FileNo, 2);
@@ -4199,6 +4230,7 @@ procedure BoardFromFEN(const FEN : string; var Board : TBoard);
       Char('7') :  inc(FileNo, 6);
       Char('/') :  begin FileNo := -1; inc(RankNo); end;
       end;
+
     inc(FileNo);
     inc(cursor);
     until c = Char(' ');
@@ -4207,21 +4239,27 @@ procedure BoardFromFEN(const FEN : string; var Board : TBoard);
 
   c := Char(Fen[cursor]);
   if c = 'w' then
-    Board.ToPlay := White
+    tempBoard.ToPlay := White
+   else if c = 'b' then
+    tempBoard.ToPlay := Black
    else
-    Board.ToPlay := Black;
+    exit(false);
+
   inc(cursor, 2);
 
   // Castling rights
 
-  Board.MovedPieces := UInt64($9100000000000091);  // assume no castling
+  tempBoard.MovedPieces := UInt64($9100000000000091);  // assume no castling
     repeat
+    if cursor > length(FEN) then
+      goto Last;
+
     c := Char(Fen[cursor]);
       case c of
-      Char('k') :  begin ClearBit(Board.MovedPieces, 7); ClearBit(Board.MovedPieces, 4); end;
-      Char('q') :  begin ClearBit(Board.MovedPieces, 0); ClearBit(Board.MovedPieces, 4); end;
-      Char('K') :  begin ClearBit(Board.MovedPieces, 63); ClearBit(Board.MovedPieces, 60); end;
-      Char('Q') :  begin ClearBit(Board.MovedPieces, 56); ClearBit(Board.MovedPieces, 60); end;
+      Char('k') :  begin ClearBit(tempBoard.MovedPieces, 7); ClearBit(tempBoard.MovedPieces, 4); end;
+      Char('q') :  begin ClearBit(tempBoard.MovedPieces, 0); ClearBit(tempBoard.MovedPieces, 4); end;
+      Char('K') :  begin ClearBit(tempBoard.MovedPieces, 63); ClearBit(tempBoard.MovedPieces, 60); end;
+      Char('Q') :  begin ClearBit(tempBoard.MovedPieces, 56); ClearBit(tempBoard.MovedPieces, 60); end;
       Char('-') :  begin inc(cursor, 2); break; end;
       end;
     inc(cursor);
@@ -4241,46 +4279,47 @@ procedure BoardFromFEN(const FEN : string; var Board : TBoard);
     c := Char(Fen[cursor]);
 
     if c = '3' then
-      SetBit(Board.EnPassant, 40 + FileNo);
+      SetBit(tempBoard.EnPassant, 40 + FileNo);
 
     if c = '6' then
-      SetBit(Board.EnPassant, 16 + FileNo);
+      SetBit(tempBoard.EnPassant, 16 + FileNo);
     end;
 
   inc(cursor, 2);
 
   if cursor >= length(Fen) then
-    GoTo Last;
+    goto Last;
 
   // HalfCount
 
   c := Char(Fen[cursor]);
   if c = '-' then
     begin
-    Board.HalfCount := 0;
+    tempBoard.HalfCount := 0;
     inc(cursor);
     end
    else
     begin
     tempstr := '';
-    while c <> ' ' do
+    while (cursor <= length(Fen)) and (Fen[cursor] <> Char(' ')) do
       begin
-      tempstr :=  tempstr + c;
+      tempstr := tempstr + Char(Fen[cursor]);
       inc(cursor);
-      c := Char(Fen[cursor]);
       end;
-    Board.HalfCount := StrToInt(tempstr);
+
+    if TryStrToInt(tempstr, temp) then
+      tempBoard.HalfCount := max(0, min(temp, 255));
     end;
 
   inc(Cursor);
 
   // TurnNumber
 
-  if cursor >= length(Fen) then
-    GoTo Last;
+  if cursor > length(Fen) then
+    goto Last;
 
   c := Char(Fen[cursor]);
-  if c = '-' then Board.TurnNumber := 1
+  if c = '-' then tempBoard.TurnNumber := 1
    else
     begin
     tempstr := c;
@@ -4290,18 +4329,31 @@ procedure BoardFromFEN(const FEN : string; var Board : TBoard);
       c := Char(Fen[cursor]);
       tempstr :=  tempstr + c;
       end;
-    Board.TurnNumber := StrToInt(tempstr);
+
+    if TryStrToInt(tempstr, temp) then
+      tempBoard.TurnNumber := max(temp, 1);
     end;
 
   Last:
 
-  Board.CalcHash;
-  Board.CalcGameStage;
+  // sanity check
+
+  if (BitCount(tempBoard.Kings and tempBoard.WhitePegs) <> 1) or (BitCount(tempBoard.Kings and tempBoard.BlackPegs) <> 1) then
+    exit(false);
+  if tempBoard.AdjacentKings then
+    exit(false);
+  if tempBoard.KingInCheck(1 - TempBoard.ToPlay) then
+    exit(false);
+
+  tempBoard.CalcHash;
+  tempBoard.CalcGameStage;
+
+  Board := CopyBoard_asm(tempBoard);
+  result := true;
 
   {$IfDef Debug}
   ValidateBoard(Board);
   {$ENDIF}
-
   end;
 
 
@@ -4392,7 +4444,7 @@ procedure BoardToFen(var FEN : AnsiString; const Board : TBoard);
 
   if Board.EnPassant <> 0 then
     begin
-    cell := GetLowBit_Alt(Board.EnPassant);
+    cell := GetLowBit(Board.EnPassant);
     RankNo := 7 - (cell shr 3);
     FileNo := cell and $7;
     FEN := FEN + ' ' + Char( Ord('a') + FileNo) + Char( Ord('1') + RankNo);
@@ -4418,7 +4470,7 @@ function MoveToStr(Move : UInt64) : string;
   Source := Move and $3F;
   Dest :=  (Move shr 6) and $3F;
 
-  result := '(' + IntToSTr(Source) + '-' + IntToStr(Dest) + '), ';
+  result := '(' + IntToStr(Source) + '-' + IntToStr(Dest) + '), ';
   end;
 
 
@@ -4435,6 +4487,40 @@ function PVToStr(PV : TMoveArray) : string;
 
   if PV[0] <> 0 then
     result := result  + PV[PV[0]].ToStr;
+  end;
+
+
+function PVToStr(PV : TPVArray) : string;    overload;
+  var
+    i : integer;
+
+  begin
+  result := '';
+
+  if PV[0] > 1 then
+    for i := 1 to PV[0]-1 do
+      result := result + PV[i].ToStr + ' ';
+
+  if PV[0] <> 0 then
+    result := result  + PV[PV[0]].ToStr;
+  end;
+
+
+function PVToStr(PV : TPVArray; maxdepth : integer) : string;    overload;
+  var
+    i, limit : integer;
+
+  begin
+  result := '';
+
+  limit := min(PV[0], maxdepth);
+
+  if limit > 1 then
+    for i := 1 to limit - 1 do
+      result := result + PV[i].ToStr + ' ';
+
+  if limit <> 0 then
+    result := result  + PV[limit].ToStr;
   end;
 
 
@@ -4470,25 +4556,27 @@ function PVToStrExt(PV : TMoveArray) : string;
 
 function CopyBoard(const Board: TBoard) : TBoard;
   begin
-  Result.Knights := Board.Knights;
-  Result.Rooks := Board.Rooks;
-  Result.Bishops := Board.Bishops;
-  Result.Queens := Board.Queens;
-  Result.Pawns := Board.Pawns;
-  Result.Kings := Board.Kings;
+  Move(Board, Result, sizeof(Board));            // sizeof(record) is size of record in bytes (including padding for alignment if any)
+  end;
 
-  Result.WhitePegs := Board.WhitePegs;
-  Result.BlackPegs := Board.BlackPegs;
 
-  Result.EnPassant := Board.EnPassant;
-  Result.MovedPieces := Board.MovedPieces;
+function CopyBoard_asm(const Board: TBoard): TBoard;
+  asm
+  .NOFRAME
+  // RCX = @Result , RDX = @Board
 
-  Result.ToPlay := Board.ToPlay;
-  Result.TurnNumber := Board.TurnNumber;
-  Result.HalfCount := Board.HalfCount;
+  vmovdqu ymm0, [rdx]
+  vmovdqu ymm1, [rdx+32]
+  vmovdqu ymm2, [rdx+64]
+  vmovdqu ymm3, [rdx+96]
 
-  Result.Hash := Board.Hash;
-  Result.GameStage := Board.GameStage;
+  vmovdqu [rcx],    ymm0
+  vmovdqu [rcx+32], ymm1
+  vmovdqu [rcx+64], ymm2
+  vmovdqu [rcx+96], ymm3
+
+  vzeroupper
+  mov rax, rcx
   end;
 
 

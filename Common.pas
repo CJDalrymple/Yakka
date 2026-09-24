@@ -61,8 +61,35 @@ type
     public
       class operator Initialize(out Dest: TPRNG);
       function Rand64 : UInt64;
+      function Random(const ARange: Integer): Integer;
       procedure Randomize;
       procedure Seed(x1, x2 : UInt64);
+    end;
+
+
+type
+  T_Timer = record
+    private
+      StartTime : TDateTime;
+      StopTime : TDateTime;
+
+      Running : boolean;
+
+      StartTickCount : Int64;
+      StopTickCount : Int64;
+      TotalTicks : Int64;
+      ElapsedHours, ElapsedMinutes, ElapsedSeconds : Int64;
+      Frequency : Int64;
+
+    public
+
+      class operator Initialize(out Dest: T_Timer);
+      procedure Start;
+      procedure Stop;
+      function StartStr : string;
+      function StopStr : string;
+      function DurationStr : string;
+      function ElapsedMilliseconds : Int64;
     end;
 
 
@@ -71,9 +98,9 @@ procedure ClearBit(var x : UInt64; Index : UInt64);
 procedure SetBit(var x : UInt64; Index : UInt64);
 function GetBit(const x : UInt64; Index : UInt64) : boolean;
 
-function GetLowBit_Alt(const x : UInt64) : Int64;
-function GetHighBit_Alt(const x : UInt64) : Int64;
-function PopLowBit_Alt(var x : UInt64) : Int64;
+function GetLowBit(const x : UInt64) : UInt64;
+function GetHighBit(const x : UInt64) : UInt64;
+function PopLowBit(var x : UInt64) : UInt64;
 
 function BitCount(const x : UInt64) : Int64;
 
@@ -90,9 +117,6 @@ implementation
 {$IF defined(MSWINDOWS)}
 function GenRandom; external ADVAPI32 name 'SystemFunction036';
 {$ENDIF}
-
-
-{$CODEALIGN 16}
 
 
 class constructor TAnonThread.ClassCreate;
@@ -165,6 +189,16 @@ function TPRNG.Rand64 : UInt64;
   end;
 
 
+function TPRNG.Random(const ARange: Integer): Integer;
+  var
+    temp : UInt64;
+
+  begin
+  Temp := Rand64 and $FFFFFFFF;
+  Result := (UInt64(UInt32(ARange)) * Temp) shr 32;
+  end;
+
+
 procedure TPRNG.Randomize;
 
 {$IF defined(MSWINDOWS)}
@@ -186,6 +220,68 @@ procedure TPRNG.Seed(x1, x2 : UInt64);
   begin
   PRNG_lo := UInt64(x1);
   PRNG_hi := UInt64(x2);
+  end;
+
+
+// T_Timer
+
+class operator T_Timer.Initialize(out Dest: T_Timer);
+  begin
+  QueryPerformanceFrequency(Dest.Frequency);
+  end;
+
+
+procedure T_Timer.Start;
+  begin
+  StartTime := now;
+  QueryPerformanceCounter(StartTickCount);
+  QueryPerformanceFrequency(Frequency);
+  running := true;
+  end;
+
+
+procedure T_Timer.Stop;
+  begin
+  StopTime := now;
+  QueryPerformanceCounter(StopTickCount);
+  running := false;
+  end;
+
+
+function T_Timer.StartStr : string;
+  begin
+  result := DateToStr(StartTime) + '  ' + TimeToStr(StartTime);
+  end;
+
+
+function T_Timer.StopStr : string;
+  begin
+  result := DateToStr(StopTime) + '  ' + TimeToStr(StopTime);
+  end;
+
+
+function T_Timer.DurationStr : string;
+  begin
+  if running = true then
+    QueryPerformanceCounter(StopTickCount);
+
+  TotalTicks := StopTickCount - StartTickCount;
+  ElapsedHours := TotalTicks div (Frequency * 60 * 60);
+  ElapsedMinutes := TotalTicks div (Frequency * 60) - ElapsedHours * 60;
+  ElapsedSeconds := TotalTicks div Frequency - ElapsedHours * 60 * 60 - ElapsedMinutes * 60;
+
+  result := IntToStr(ElapsedHours) + ':' + FormatFloat('00', ElapsedMinutes * 1.0)  + ':' + FormatFloat('00', ElapsedSeconds * 1.0) + ' [h:m:s]'
+  end;
+
+
+function T_Timer.ElapsedMilliseconds : Int64;
+  begin
+  if running = true then
+    QueryPerformanceCounter(StopTickCount);
+
+  TotalTicks := StopTickCount - StartTickCount;
+
+  result := (TotalTicks * 1000) div Frequency;
   end;
 
 
@@ -246,7 +342,7 @@ procedure SetAllBits(var x : UInt64);
   end;
 
 
-function GetLowBit_Alt(const x : UInt64) : Int64;
+function GetLowBit(const x : UInt64) : UInt64;
   // returns the index of the lowest significant set bit
   // at least one bit must be set
 
@@ -257,7 +353,7 @@ function GetLowBit_Alt(const x : UInt64) : Int64;
   end;
 
 
-function GetHighBit_Alt(const x : UInt64) : Int64;
+function GetHighBit(const x : UInt64) : UInt64;
   // returns the index of the highest significant set bit
   // at least one bit must be set
 
@@ -268,7 +364,7 @@ function GetHighBit_Alt(const x : UInt64) : Int64;
   end;
 
 
-function PopLowBit_Alt(var x : UInt64) : Int64;
+function PopLowBit(var x : UInt64) : UInt64;
   // clears the lowest significant set bit and returns it's index
   // at least one bit must be set
 

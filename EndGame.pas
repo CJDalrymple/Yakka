@@ -73,10 +73,12 @@ var
 
 implementation
 
+{$CODEALIGN 16}
+
 uses
   Search;
 
-function Distance(Cell1, Cell2 : integer) : integer;
+function ChebyshevDistance(Cell1, Cell2 : integer) : integer;
   begin
   result := max( abs(Cell1 shr 3 - Cell2 shr 3), abs(Cell1 and $7 - Cell2 and $7));
   end;
@@ -140,7 +142,7 @@ function KingOnKeySquare(const Board : TBoard; Player, Cell : integer) : boolean
 
 function IndexFromBoard(const Board : TBoard) : UInt64;
   var
-    index, cell, piece : integer;
+    cell, piece : integer;
     pegs : UInt64;
 
   begin
@@ -149,7 +151,7 @@ function IndexFromBoard(const Board : TBoard) : UInt64;
   while pegs <> 0 do
     begin
     result := result * 11;
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     Piece := Board.GetPiece_asm(Cell);
 
     result := result + piece;
@@ -159,7 +161,7 @@ function IndexFromBoard(const Board : TBoard) : UInt64;
   while pegs <> 0 do
     begin
     result := result * 11;
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     Piece := Board.GetPiece_asm(Cell);
 
     result := result + piece + 5;
@@ -172,18 +174,18 @@ function Evaluate_kp_K(const Board : TBoard; Eval : integer) : integer;
     PawnCell, PromotionCell, KingCell, OpponentKingCell : integer;
 
   begin
-  PawnCell := GetLowBit_Alt(Board.Pawns);
+  PawnCell := GetLowBit(Board.Pawns);
 
   if (Board.Pawns and Board.WhitePegs) <> 0 then  // white winning
     begin
-    OpponentKingCell := GetLowBit_Alt(Board.Kings and Board.BlackPegs);
-    KingCell := GetLowBit_Alt(Board.Kings and Board.WhitePegs);
+    OpponentKingCell := GetLowBit(Board.Kings and Board.BlackPegs);
+    KingCell := GetLowBit(Board.Kings and Board.WhitePegs);
     PromotionCell := PawnCell and $7;
 
-    if min(5, Distance(PawnCell, PromotionCell)) < Distance(OpponentKingCell, PromotionCell) - Board.ToPlay then   // win for white
+    if min(5, ChebyshevDistance(PawnCell, PromotionCell)) < ChebyshevDistance(OpponentKingCell, PromotionCell) - Board.ToPlay then   // win for white
       exit(Eval);
 
-    if distance(PawnCell, OpponentKingCell) < Distance(PawnCell, KingCell) - Board.ToPlay then   // draw : pawn can be captured
+    if ChebyshevDistance(PawnCell, OpponentKingCell) < ChebyshevDistance(PawnCell, KingCell) - Board.ToPlay then   // draw : pawn can be captured
       exit(Eval div 64);
 
     if  KingOnKeySquare(Board, white, PawnCell) then             // win for white
@@ -191,14 +193,14 @@ function Evaluate_kp_K(const Board : TBoard; Eval : integer) : integer;
     end
    else
     begin      // black winning
-    OpponentKingCell := GetLowBit_Alt(Board.Kings and Board.WhitePegs);
-    KingCell := GetLowBit_Alt(Board.Kings and Board.BlackPegs);
+    OpponentKingCell := GetLowBit(Board.Kings and Board.WhitePegs);
+    KingCell := GetLowBit(Board.Kings and Board.BlackPegs);
     PromotionCell := 56 + (PawnCell and $7);
 
-    if min(5, Distance(PawnCell, PromotionCell)) < Distance(OpponentKingCell, PromotionCell) - ( 1- Board.ToPlay) then   // win for black
+    if min(5, ChebyshevDistance(PawnCell, PromotionCell)) < ChebyshevDistance(OpponentKingCell, PromotionCell) - ( 1- Board.ToPlay) then   // win for black
       exit(Eval);
 
-    if distance(PawnCell, OpponentKingCell) < Distance(PawnCell, KingCell) - (1 - Board.ToPlay) then    // draw : pawn can be captured
+    if ChebyshevDistance(PawnCell, OpponentKingCell) < ChebyshevDistance(PawnCell, KingCell) - (1 - Board.ToPlay) then    // draw : pawn can be captured
       exit(Eval div 64);
 
     if  KingOnKeySquare(Board, black, PawnCell) then           // win for black
@@ -212,126 +214,6 @@ function Evaluate_kp_K(const Board : TBoard; Eval : integer) : integer;
 function Evaluate_Draw(const Board : TBoard; Eval : integer) : integer;
   begin
   result := Eval div 64;
-  end;
-
-
-function WhiteBestCaseDraw(const Board : TBoard; Eval : integer) : integer;
-  begin
-  result := min(Eval, Eval div 64);
-  end;
-
-function BlackBestCaseDraw(const Board : TBoard; Eval : integer) : integer;
-  begin
-  result := max(Eval, Eval div 64);
-  end;
-
-
-function Evaluate_MostlyDraw(const Board : TBoard; Eval : integer) : integer;
-  begin
-  result := Eval div 32;
-  end;
-
-
-function Evaluate_BN(const Board : TBoard; Eval : integer) : integer;
-
-   // Mate with KBN vs K. Drive the defending king towards an edge,
-   // and then to a corner square with same color as the bishop
-   // In tables below, target corner square has lowest value
-   // i.e penalty is least for these squares
-
-  const
-
-    EdgePenalty : array[0..63] of integer =
-
-     (  0,   0,   0,   0,   0,   0,   0,  0,
-        0,  16,  16,  16,  16,  16,  16,  0,
-        0,  16,  25,  25,  25,  25,  16,  0,
-        0,  16,  25,  29,  29,  25,  16,  0,
-        0,  16,  25,  29,  29,  25,  16,  0,
-        0,  16,  25,  25,  25,  25,  16,  0,
-        0,  16,  16,  16,  16,  16,  16,  0,
-        0,   0,   0,   0,   0,   0,   0,  0);
-
-
-     CornerDistance_W : array[0..63] of integer =
-
-     (  0,  1,  2,  3,  4,  5,  6,  7,
-        1,  1,  2,  3,  4,  5,  6,  6,
-        2,  2,  2,  3,  4,  5,  5,  5,
-        3,  3,  3,  3,  4,  4,  4,  4,
-        4,  4,  4,  4,  3,  3,  3,  3,
-        5,  5,  5,  4,  3,  2,  2,  2,
-        6,  6,  5,  4,  3,  2,  1,  1,
-        7,  6,  5,  4,  3,  2,  1,  0);
-
-
-     CornerDistance_B : array[0..63] of integer =
-
-     (  7,  6,  5,  4,  3,  2,  1,  0,
-        6,  6,  5,  4,  3,  2,  1,  1,
-        5,  5,  5,  4,  3,  2,  2,  2,
-        4,  4,  4,  4,  3,  3,  3,  3,
-        3,  3,  3,  3,  4,  4,  4,  4,
-        2,  2,  2,  3,  4,  5,  5,  5,
-        1,  1,  2,  3,  4,  5,  6,  6,
-        0,  1,  2,  3,  4,  5,  6,  7);
-
-
-  var
-    blackKing, whiteKing, AttackingKing, DefendingKing, penalty, BishopCell, KnightCell : integer;
-    knightDist, cornerDist, kingDist : integer;
-    Mask, cornerMask, kingPrison : UInt64;
-
-  begin
-  BlackKing :=  GetLowBit_Alt(Board.Kings and Board.BlackPegs);
-  WhiteKing :=  GetLowBit_Alt(Board.Kings and Board.WhitePegs);
-
-  knightCell := GetLowBit_Alt(Board.Knights);
-  bishopCell := GetLowBit_Alt(Board.Bishops);
-
-  if (Board.Knights and Board.WhitePegs) <> 0 then
-    begin
-    DefendingKing := BlackKing; // white winning
-    AttackingKing := WhiteKing;
-    end
-   else
-    begin
-    DefendingKing := WhiteKing;  // black winning
-    AttackingKing := BlackKing;
-    end;
-
-  kingDist := Distance(WhiteKing, BlackKing);
-
-  penalty :=  kingDist + ManhattanDistance(WhiteKing, BlackKing);     // goal : keep kings close
-  penalty :=  penalty + EdgePenalty[DefendingKing];                   // goal : push defending king to edge of the board
-
-  knightDist := Distance(DefendingKing, knightCell);
-  penalty := penalty + max(knightDist - 3, 0) * 3;                    // goal : bring knight closer to the action
-
-  if (Board.Bishops and whitesqr) <> 0 then
-    begin
-    cornerDist := CornerDistance_W[DefendingKing];
-    cornerMask := $8000000000000001;
-    end
-   else
-    begin
-    cornerDist := CornerDistance_B[DefendingKing];
-    cornerMask := $100000000000080;
-    end;
-
-  penalty := penalty + cornerDist * 19;                               // goal : push defending king towards mate corner
-
-  Mask := Board.KnightMask[knightCell];
-  Mask := Mask or Board.BishopAttack_asm(bishopCell);
-  Mask := Mask or Board.KingMask[AttackingKing];
-
-  kingPrison := KingRange(DefendingKing, Mask);                       // confine defending king and squeeze
-  penalty := penalty + min(bitcount(kingPrison), 18);
-
-  if (Board.Bishops and Board.BlackPegs) <> 0 then
-    result := -Eval + penalty   // black is winning, so white is down on material and larger penalty is better for white
-   else
-    result := Eval - penalty;   // white is winning, so white is up material and smaller penalty is better for white
   end;
 
 
@@ -349,26 +231,20 @@ function Evaluate_EasyMate(const Board : TBoard; Eval : integer) : integer;
             36, 25, 16,  9,  9, 16, 25, 36);
 
   var
-    BlackKingCell, WhiteKingCell, DefeatedKingCell, index, material, bonus : integer;
+    BlackKingCell, WhiteKingCell, bonus : integer;
     WhiteWinning : boolean;
-
- // Mate with K vs kxx.
- // Returns score with bonus from white perspective
- // Bonus to drive the black king towards the edge of board,
- // keep white king towards the centre,
- // and keep white king close to black king.
 
   begin
 
-  BlackKingCell :=  GetLowBit_Alt(Board.Kings and Board.BlackPegs);
-  WhiteKingCell :=  GetLowBit_Alt(Board.Kings and Board.WhitePegs);
+  BlackKingCell :=  GetLowBit(Board.Kings and Board.BlackPegs);
+  WhiteKingCell :=  GetLowBit(Board.Kings and Board.WhitePegs);
 
   WhiteWinning := (bitcount(Board.WhitePegs) > 1);
 
   if WhiteWinning then         // white winning
-    bonus := 8 * (EdgeBonus[BlackKingCell] - Distance(WhiteKingCell, BlackKingCell) * Distance(WhiteKingCell, BlackKingCell))
+    bonus := 8 * (EdgeBonus[BlackKingCell] - ChebyshevDistance(WhiteKingCell, BlackKingCell) * ChebyshevDistance(WhiteKingCell, BlackKingCell))
    else
-    bonus := 8 * (EdgeBonus[WHiteKingCell] - Distance(WhiteKingCell, BlackKingCell) * Distance(WhiteKingCell, BlackKingCell));
+    bonus := 8 * (EdgeBonus[WhiteKingCell] - ChebyshevDistance(WhiteKingCell, BlackKingCell) * ChebyshevDistance(WhiteKingCell, BlackKingCell));
 
   if ((board.ToPlay = White) and WhiteWinning) or ((board.ToPlay = black) and not WhiteWinning) then
     result := Eval + bonus
@@ -499,18 +375,6 @@ procedure InitializeEndGameLookup;
   // KQ v kn   : Mate by White
   index := queen * 11 + (knight + 5);
   EndGameLookup[index] := Evaluate_EasyMate;
-
-  // K v knb    : Mate
-  index := (knight + 5) * 11 + (bishop + 5);
-  EndGameLookup[index] := Evaluate_BN;
-  index := (bishop + 5) * 11 + (knight + 5);
-  EndGameLookup[index] := Evaluate_BN;
-
-  // KNB v k    : Mate
-  index := knight * 11 + bishop;
-  EndGameLookup[index] := Evaluate_BN;
-  index := bishop * 11 + knight;
-  EndGameLookup[index] := Evaluate_BN;
 
   // 5-man eval
 

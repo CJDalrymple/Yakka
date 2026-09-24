@@ -27,30 +27,42 @@ unit OpenBook;
 interface
 
 uses
-  System.SysUtils, System.Classes, System.Character, System.Generics.Collections, System.Math, System.StrUtils, System.Types, GameDef, common;
+  System.SysUtils, System.Classes, System.Character, System.Generics.Collections,
+  System.Math, System.StrUtils, System.Types, System.SyncObjs, GameDef, common;
 
 type
   T_MoveSelection = (ms_None, ms_Random, ms_MostFreq, ms_BestHist, ms_BestScore);
 
 type
   T_OpeningBook = record
+    private
 
-    Hash_Array : array[0..8703] of UInt64;
-    Index_Array : array[0..8703] of UInt32;
-    Move_Array : array[0..12287] of UInt64;
+    class var
+      Hash_Array : array[0..8703] of UInt64;
+      Index_Array : array[0..8703] of UInt32;
+      Move_Array : array[0..12287] of UInt64;
 
-    Hash_Count : integer;
-    Move_Count : integer;
+      Hash_Count : integer;
+      Move_Count : integer;
+      IsInitializedFlag : array[0..0] of integer;  // 0 = uninitialized, -1 = initialized
 
-    function BinarySearch(key : UInt64) : integer;
-    function GetMove(key : UInt64; var Move : TMove; MoveSelection : T_MoveSelection) : boolean;
-    function LoadFromResource(ResourceName : string) : boolean;
+      class function BinarySearch(key : UInt64) : integer;  static;
+      class function LoadFromResource(ResourceName : string) : boolean;  static;
+
+    public
+      class function IsInitialized : boolean;  static;
+      class procedure Prepare; static;
+      class function GetMove(key : UInt64; var Move : TMove; MoveSelection : T_MoveSelection) : boolean;  static;
 
     end;
 
 
 implementation
 
+{$CODEALIGN 16}
+
+var
+  BookLock : TCriticalSection;
 
 function Compare(const Left, Right: UInt64): Integer;
   begin
@@ -63,7 +75,38 @@ function Compare(const Left, Right: UInt64): Integer;
   end;
 
 
-function T_OpeningBook.BinarySearch(key : UInt64) : integer;
+class function T_OpeningBook.IsInitialized : boolean;
+  begin
+  if IsInitializedFlag[0] = -1 then
+    result := true
+   else
+    result := false;
+  end;
+
+
+class procedure T_OpeningBook.Prepare;
+  begin
+  BookLock.Enter;
+    try
+    if IsInitialized = false then
+      begin
+        try
+        if LoadFromResource('Open_Book') = false then
+          Hash_Count := 0;
+        except
+        Hash_Count := 0;                    // book unavailable - play on without it
+        Move_Count := 0;
+        end;
+
+      IsInitializedFlag[0] := -1;           // published last, under the lock
+      end;
+    finally
+    BookLock.Leave;
+    end;
+  end;
+
+
+class function T_OpeningBook.BinarySearch(key : UInt64) : integer;
 
  // returns index if key is found, else -1 if not found
 
@@ -96,20 +139,25 @@ function T_OpeningBook.BinarySearch(key : UInt64) : integer;
   end;
 
 
-function T_OpeningBook.GetMove(key : UInt64; var Move : TMove; MoveSelection : T_MoveSelection) : boolean;
+class function T_OpeningBook.GetMove(key : UInt64; var Move : TMove; MoveSelection : T_MoveSelection) : boolean;
 
   var
     index, moveCount, xxx, score : integer;
     expected, adjusted, best : double;
     i, n : integer;
+    PRNG : TPRNG;
 
   begin
+  if IsInitialized = false then
+    Prepare;
+
   Move := 0;
   result := false;
 
   if (Hash_Count = 0) or (MoveSelection = ms_none) then
     Exit;
 
+  PRNG.Randomize;
   index := BinarySearch(key);
 
   if index >= 0 then
@@ -122,7 +170,8 @@ function T_OpeningBook.GetMove(key : UInt64; var Move : TMove; MoveSelection : T
 
       ms_Random :     // selects move at random with probability in proportion to popularity
           begin
-          xxx := random(256);
+          xxx := PRNG.random(256);
+
           i := 0;
           move := Move_Array[index];
           score := move.HalfMoveCount;
@@ -184,7 +233,7 @@ function T_OpeningBook.GetMove(key : UInt64; var Move : TMove; MoveSelection : T
   end;
 
 
-function T_OpeningBook.LoadFromResource(ResourceName : string) : boolean;
+class function T_OpeningBook.LoadFromResource(ResourceName : string) : boolean;
   var
     Input : TStringList;
     i, len : integer;
@@ -192,6 +241,8 @@ function T_OpeningBook.LoadFromResource(ResourceName : string) : boolean;
 
   begin
   result := false;
+  Hash_Count := 0;
+  Move_Count := 0;
 
   Stream := TResourceStream.Create(HInstance, ResourceName, RT_RCDATA);
     try
@@ -200,11 +251,23 @@ function T_OpeningBook.LoadFromResource(ResourceName : string) : boolean;
       try
       Input.LoadFromStream(Stream);
 
+      if Input.Count < 6 then
+        exit;
+
       len := length(Input[2]);
       Hash_Count := StrToInt(trim(RightStr(Input[2], len - 23)));
 
       len := length(Input[3]);
       Move_Count := StrToInt(trim(RightStr(Input[3], len - 19)));
+
+      if (Hash_Count < 0) or (Hash_Count > Length(Hash_Array)) or
+         (Move_Count < 0) or (Move_Count > Length(Move_Array)) or
+         (Input.Count < 6 + Hash_Count + Move_Count) then
+        begin
+        Hash_Count := 0;
+        Move_Count := 0;
+        exit;
+        end;
 
       for i := 0 to Hash_Count - 1 do
         begin
@@ -216,7 +279,6 @@ function T_OpeningBook.LoadFromResource(ResourceName : string) : boolean;
         Move_Array[i] := StrToUInt64(LeftStr(Input[6 + Hash_Count + i], 17));
 
       result := true;
-
       finally
 
       Input.Free;
@@ -227,5 +289,13 @@ function T_OpeningBook.LoadFromResource(ResourceName : string) : boolean;
     end;
   end;
 
+
+initialization
+
+  BookLock := TCriticalSection.Create;
+
+finalization
+
+  BookLock.Free;
 
 end.

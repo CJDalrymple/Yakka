@@ -24,15 +24,17 @@ Alternatively Yakka can be run as a command line console using UCI commands.
 + option name Hash type spin default 64 min 1 max 256
 + option name Clear Hash type button
 + option name Ponder type check default false
++ option name MultiPV type spin default 1 min 1 max 32
++ option name SyzygyPath type string default <empty>
 + option name OwnBook type check default false
-+ option name UCI\_EngineAbout type string
+
 
 ## Download
 
-You can download the precompiled Windows executable : 'Yakka v1.5 x64.exe'.
+You can download the precompiled Windows executable : 'Yakka v1.6 x64.exe'.
 This will run on x86-64 CPU's which support the BMI2 and AVX2 instruction sets.
 
-I currently can't provide a LINUX executable, but will investigate this possibility for a future release.
+I currently can't provide a LINUX executable, but will investigate this for the next release.
 
 ## Compilation
 To build the engine from source, use Delphi 12.0 Alexandra or later version.
@@ -40,10 +42,10 @@ To build the engine from source, use Delphi 12.0 Alexandra or later version.
 + Import the source files from GitHub repository
 + Set Target Platform to Windows 64-bit
 + Open Project Resources and Images..., add the following to Resource Files:
-   + File Name: `Opening_Book_00.txt`
+   + File Name: `Opening_Book_01.txt`
    + Type: `RCDATA`
-   + Identifier: `Open_Book`  
-     +               
+   + Identifier: `Open_Book`
+               
    + File Name: `NNUE 768→512x2→1 501451147c +50+ gen8 b6.net`  
    + Type: `RCDATA`  
    + Identifier: `_768x512_x2_gen8_b6`  
@@ -92,17 +94,18 @@ To build the engine from source, use Delphi 12.0 Alexandra or later version.
 
 * Opening Book
   * Own internal format
-  * Total Book Positions = 8507 (v1.1)
-  * Total Book Moves = 12184 (v1.1)
+  * Total Book Positions = 4444 (v1.2)
+  * Total Book Moves = 6375 (v1.2)
 
 ## Version History
 
 * Yakka v1.0 - 10th April 2024       Initial release
 * Yakka v1.1 - 15th September 2024   Bug fixes and improved playing strength
-* Yakka v1.2 - 8th February 2025    Changed evaluation from HCE to NNUE
+* Yakka v1.2 - 8th February 2025     Changed evaluation from HCE to NNUE
 * Yakka v1.3 - 10th August 2025      Bug fixes, implemented pondering and improved NNUE implementation
 * Yakka v1.4 - 11th November 2025    Bug fixes and improved NNUE implementation
 * Yakka v1.5 - 22nd January 2026     Strength gain using larger NNUE net and output buckets
+* Yakka v1.6 - 23rd September 2026   Implemented syzygy TB, multiPV, and lots of bug fixes
 
 ## Help \& Support
 
@@ -118,7 +121,7 @@ This project is licenced under the MIT Licence
 ## Future Endeavours (TODO)
 
 In no particular order:
-* Much experimenting / tweaking
-* MultiPV
-* Endgame Tablebases
+* Linux build
+* Improve NNUE net evaluation
+* Much experimenting / tweaking / bug fixes
 

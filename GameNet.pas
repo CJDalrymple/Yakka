@@ -27,7 +27,7 @@ unit GameNet;
 interface
 
 uses
-  Winapi.Windows, System.Classes, System.SysUtils, Math, Common, GameDef, EndGame, CPU_Info;
+  Winapi.Windows, System.Classes, System.SysUtils, System.Math, Common, GameDef, EndGame, CPU_Info;
 
 type
   TNetArchType = (nt_unknown, _768→512x2→1);
@@ -44,10 +44,14 @@ const
   Accumulator_Width = 1024;
 
   Buckets = 6;
-  BucketLookup : array[0..16] of integer = (0, 0, 1, 1, 2, 2, 3, 3, 3, 3, 4, 4, 4, 5, 5, 5, 5);
+  BucketLookup : array[0..31] of integer = (0, 0, 1, 1, 2, 2, 3, 3, 3, 3, 4, 4, 4, 5, 5, 5,
+                                            5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5);
 
 type
   TAccumulator = array[0..Accumulator_Width-1] of int32;
+  PAccumulator = ^TAccumulator;
+
+  TAlignableAccumulator = array[0..Accumulator_Width-1 + 63] of int32;
 
   T_GetBias_asm = procedure(dest, IndexAdd : PInteger; colour : integer);
   T_Add_asm = procedure(dest, IndexAdd : PInteger; colour : integer);
@@ -60,20 +64,14 @@ type
 
 
 type
-  TEvalRec = record
-    UID : UInt64;
-    Data : UInt64;
-    end;
-
-
-type
   T_EvalHash_Table = record
     const
       TableSize = $40000;             // 2^18       = 262,144 slots
       TableMask = TableSize - 1 ;     // 2^18 - 1
+      TagMask   = UInt64($FFFFFFFFFFFF0000);
 
     var
-    Table : Array[0..TableSize-1] of TEvalRec;
+      Table : Array[0..TableSize-1] of UInt64;
 
     function RetrieveScore(HashCode : UInt64; var score : integer) : boolean;
     procedure StoreScore(HashCode : UInt64; score : integer);
@@ -84,31 +82,46 @@ type
 type
   TGameNet = record
 
-  var
-    Weights : array[0..Attribute_Count * InputLayerWidth - 1] of int32;
-    Bias : array[0..InputLayerWidth - 1] of int32;
+  type
+    TWeights = array[0..Attribute_Count * InputLayerWidth - 1] of int32;
+    PWeights = ^TWeights;
 
-    OutputWeights : array[0..buckets * Accumulator_Width - 1] of int32;
-    OutputBias : array[0..buckets - 1] of int32;
+    TBias = array[0..InputLayerWidth - 1] of int32;
+    PBias = ^TBias;
+
+    TOutputWeights = array[0..buckets * Accumulator_Width - 1] of int32;
+    POutputWeights = ^TOutputWeights;
+
+    TOutputBias = array[0..buckets - 1] of int32;
+    POutputBias = ^TOutputBias;
+
+  var
+    Weights : PWeights;
+    Bias : PBias;
+
+    OutputWeights : POutputWeights;
+    OutputBias : POutputBias;
 
     Hash : UInt64;
 
   public
     class operator Initialize (out x: TGameNet);
+    class operator Finalize(var x: TGameNet);
+
     function LoadFromResource(const ResourceIdentifier : string) : boolean;
     function LoadFromFile(const FileName : string) : boolean;
 
-    procedure RefreshAccumulator(var Accumulator : TAccumulator; const Board : TBoard);
-    procedure UpdateAccumulator(const SourceAccumulator : TAccumulator; var DestAccumulator : TAccumulator; Move : TMove; const Board : TBoard);
+    procedure RefreshAccumulator(Accumulator : PAccumulator; const Board : TBoard);
+    procedure UpdateAccumulator(SourceAccumulator, DestAccumulator : PAccumulator; Move : TMove; const Board : TBoard);
 
-    function  ScoreFromAccumulator(const Accumulator : TAccumulator; colour, pieceCount : integer) : integer;
+    function  ScoreFromAccumulator(Accumulator : PAccumulator; colour, pieceCount : integer) : integer;
     function  Score(const Board : TBoard) : integer;
     end;
 
 
-function ScoreFromAccumulator(const Accumulator : TAccumulator; const Board : TBoard) : integer;
-procedure Update_Accumulator(const SourceAccumulator : TAccumulator; var DestAccumulator : TAccumulator; Move : TMove; const Board : TBoard);
-procedure Refresh_Accumulator(var Accummulator : TAccumulator; const Board : TBoard);
+function ScoreFromAccumulator(Accumulator : PAccumulator; const Board : TBoard) : integer;
+procedure Update_Accumulator(SourceAccumulator, DestAccumulator : PAccumulator; Move : TMove; const Board : TBoard);
+procedure Refresh_Accumulator(Accummulator : PAccumulator; const Board : TBoard);
 
 
 var
@@ -128,6 +141,8 @@ var
 
 implementation
 
+{$CODEALIGN 16}
+
 uses
   Search;
 
@@ -136,49 +151,28 @@ uses
 
 // score [-32767..32767]
 
+
 procedure T_EvalHash_Table.StoreScore(HashCode : UInt64; Score : integer);
-  var
-    index, Data : UInt64;
-
   begin
-  index := UInt64(HashCode and TableMask);
-
-  Data := UInt64(Score + 65536);
-
-  Table[index].UID := HashCode xor Data;
-  Table[index].Data := Data;
+  Table[HashCode and TableMask] := (HashCode and TagMask) or UInt64(Score + 32768);
   end;
 
 
 function T_EvalHash_Table.RetrieveScore(HashCode : UInt64; var score : integer) : boolean;
   var
-    index, UID, Data : UInt64;
+    entry : UInt64;
 
   begin
-  result := false;
-  index := (HashCode and TableMask);
-
-  UID := Table[index].UID;
-  Data := Table[index].Data;
-
-  if (UID xor Data) = HashCode then
-    begin
-    score := integer(Data) - 65536;
-    exit(true);
-    end;
+  entry := Table[HashCode and TableMask];
+  result := ((entry xor HashCode) and TagMask) = 0;
+  if result then
+    score := integer(entry and $FFFF) - 32768;
   end;
 
 
 procedure T_EvalHash_Table.Clear;
-  var
-    i : integer;
-
   begin
-  for i := 0 to TableSize - 1 do
-    begin
-    Table[i].UID := 0;
-    Table[i].Data := 0;
-    end;
+  FillChar(Table, SizeOf(Table), 0);
   end;
 
 
@@ -188,17 +182,20 @@ procedure GetBias_asm_AVX2(dest, IndexAdd : PInteger; colour : integer);
   asm
   .NOFRAME
 
+  movzx r8, r8b
   imul r8, InputLayerWidth * 4      // if colour = black (1) then r8 = InputLayerWidth * 4, else if white (0) then r8 = 0
   add rcx, r8
   xor r11, r11                      // r11 = 0
 
   @loop1:
-  vmovdqu ymm0, [rdx+r11]           //  Load Bias
-  vmovdqu [rcx+r11], ymm0           //  Save to Self
+  vmovdqa ymm0, [rdx+r11]           //  Load Bias
+  vmovdqa [rcx+r11], ymm0           //  Save to Self
 
   add r11, 32
   cmp r11, InputLayerWidth * 4
   jl  @loop1
+
+  vzeroupper
   end;
 
 
@@ -206,18 +203,21 @@ procedure Add_asm_AVX2(dest, IndexAdd : PInteger; colour : integer);
   asm
   .NOFRAME
 
+  movzx r8, r8b
   imul r8, InputLayerWidth * 4      // if colour = black (1) then r8 = InputLayerWidth * 4, else if white (0) then r8 = 0
   add rcx, r8
   xor r11, r11                      // r11 = 0
 
   @loop1:
-  vmovdqu ymm0, [rcx+r11]           //  Load Self
+  vmovdqa ymm0, [rcx+r11]           //  Load Self
   vpaddd ymm0, ymm0, [rdx+r11]      //  Add
-  vmovdqu [rcx+r11], ymm0           //  Save Self
+  vmovdqa [rcx+r11], ymm0           //  Save Self
 
   add r11, 32
   cmp r11, InputLayerWidth * 4
   jl  @loop1
+
+  vzeroupper
   end;
 
 
@@ -226,21 +226,22 @@ procedure UpdateMove_asm_AVX2(source, dest, IndexAdd, IndexSub : PInteger; colou
   .NOFRAME
 
   mov r10d, colour
-
   imul r10, InputLayerWidth * 4     // if colour = black (1) then r10 = InputLayerWidth * 4, else if white (0) then r10 = 0
   add rcx, r10
   add rdx, r10
   xor r11, r11                      // r11 = 0
 
   @loop1:
-  vmovdqu ymm0, [rcx+r11]           //  Load from Self as source
+  vmovdqa ymm0, [rcx+r11]           //  Load from Self as source
   vpaddd ymm0, ymm0, [r8+r11]       //  Add
   vpsubd ymm0, ymm0, [r9+r11]       //  Sub
-  vmovdqu [rdx+r11], ymm0           //  Save to Dest
+  vmovdqa [rdx+r11], ymm0           //  Save to Dest
 
   add r11, 32
   cmp r11, InputLayerWidth * 4
   jl  @loop1
+
+  vzeroupper
   end;
 
 
@@ -257,15 +258,17 @@ procedure UpdateCapture_asm_AVX2(source, dest, IndexAdd, IndexSub1, IndexSub2 : 
   xor r11, r11                      // r11 = 0
 
   @loop1:
-  vmovdqu ymm0, [rcx+r11]           //  Load from Self as source
+  vmovdqa ymm0, [rcx+r11]           //  Load from Self as source
   vpaddd ymm0, ymm0, [r8+r11]       //  Add
   vpsubd ymm0, ymm0, [r9+r11]       //  Sub
   vpsubd ymm0, ymm0, [r10+r11]      //  Sub
-  vmovdqu [rdx+r11], ymm0           //  Save to Dest
+  vmovdqa [rdx+r11], ymm0           //  Save to Dest
 
   add r11, 32
   cmp r11, InputLayerWidth * 4
   jl  @loop1
+
+  vzeroupper
   end;
 
 
@@ -273,19 +276,22 @@ procedure UpdateSelf_asm_AVX2(source, IndexAdd, IndexSub : PInteger; colour : in
   asm
   .NOFRAME
 
+  movzx r9, r9b
   imul r9, InputLayerWidth * 4      // if colour = black (1) then r9 = InputLayerWidth * 4, else if white (0) then r9 = 0
   add rcx, r9
   xor r11, r11                      // r11 = 0
 
   @loop1:
-  vmovdqu ymm0, [rcx+r11]           //  Load Self
+  vmovdqa ymm0, [rcx+r11]           //  Load Self
   vpaddd ymm0, ymm0, [rdx+r11]      //  Add
   vpsubd ymm0, ymm0, [r8+r11]       //  Sub
-  vmovdqu [rcx+r11], ymm0           //  Save Self
+  vmovdqa [rcx+r11], ymm0           //  Save Self
 
   add r11, 32
   cmp r11, InputLayerWidth * 4
   jl  @loop1
+
+  vzeroupper
   end;
 
 
@@ -296,7 +302,7 @@ function GetEval_asm_AVX2(source, weights : PInteger; colour : integer) : int16;
   asm
   .NOFRAME
 
-  test r8, r8
+  test r8d, r8d
   JNZ @BTP
 
   @WTP:
@@ -316,41 +322,35 @@ function GetEval_asm_AVX2(source, weights : PInteger; colour : integer) : int16;
   xor r8, r8                        // r8 = 0
 
   vpxor ymm0, ymm0, ymm0            // zero the accummulator
-  vpxor ymm9, ymm9, ymm9            // zero the accummulator
+  vpxor ymm5, ymm5, ymm5            // zero the accummulator
   vpxor ymm3, ymm3, ymm3            // zero the floor
 
-  vpbroadcastd ymm8, clamp
+  vpbroadcastd ymm4, clamp
 
   @loop1:
                                     //  STP accumulator
-  vmovdqu ymm1, [rcx+r8]            //  mov 8 int32 values B into ymm1
-  vmovdqu ymm2, [rdx+r8]            //  mov 8 int32 values C into ymm2
-
+  vmovdqa ymm1, [rcx+r8]            //  mov 8 int32 values B into ymm1
   vpmaxsd ymm1, ymm3, ymm1          //  perform ReLU  i.e. if B < 0 then B = 0, 8 int32 at a time
-  vpminsd ymm1, ymm8, ymm1          //  clamp to sqrt(2^31)
+  vpminsd ymm1, ymm4, ymm1          //  clamp to sqrt(2^31)
   vpmulld ymm1, ymm1, ymm1          //  square the result   i.e. scReLU activation
-  vpsrad ymm1, ymm1, 8              //  divide by 256
+  vpsrad  ymm1, ymm1, 8             //  divide by 256
+  vpmulld ymm1, ymm1, [rdx+r8]      //  Calculate D = B x C, 8 int32 at a time
+  vpaddd  ymm0, ymm0, ymm1          //  sum result
 
                                     //  OTP accumulator
-  vmovdqu ymm5, [r9+r8]             //  mov 8 int32 values B into ymm5
-  vmovdqu ymm6, [r10+r8]            //  mov 8 int32 values C into ymm6
-
-  vpmaxsd ymm5, ymm3, ymm5          //  perform ReLU  i.e. if B < 0 then B = 0, 8 int32 at a time
-  vpminsd ymm5, ymm8, ymm5          //  clamp to sqrt(2^31)
-  vpmulld ymm5, ymm5, ymm5          //  square the result   i.e. scReLU activation
-  vpsrad ymm5, ymm5, 8              //  divide by 256
-
-  vpmulld ymm4, ymm1, ymm2          //  Calculate D = B x C, 8 int32 at a time
-  vpaddd ymm0, ymm0, ymm4
-
-  vpmulld ymm7, ymm5, ymm6          //  Calculate D = B x C, 8 int32 at a time
-  vpaddd ymm9, ymm9, ymm7
+  vmovdqa ymm2, [r9+r8]             //  mov 8 int32 values B into ymm5
+  vpmaxsd ymm2, ymm3, ymm2          //  perform ReLU  i.e. if B < 0 then B = 0, 8 int32 at a time
+  vpminsd ymm2, ymm4, ymm2          //  clamp to sqrt(2^31)
+  vpmulld ymm2, ymm2, ymm2          //  square the result   i.e. scReLU activation
+  vpsrad  ymm2, ymm2, 8             //  divide by 256
+  vpmulld ymm2, ymm2, [r10+r8]      //  Calculate D = B x C, 8 int32 at a time
+  vpaddd  ymm5, ymm5, ymm2          //  sum result
 
   add r8, 32
   cmp r8, InputLayerWidth * 4
   jl  @loop1
 
-  vpaddd ymm0, ymm0, ymm9
+  vpaddd ymm0, ymm0, ymm5
 
   vextractf128 xmm1, ymm0, $1
   vzeroupper
@@ -382,17 +382,20 @@ procedure GetBias_asm_AVX512(dest, IndexAdd : PInteger; colour : integer);
   asm
   .NOFRAME
 
+  movzx r8, r8b
   imul r8, InputLayerWidth * 4      // if colour = black (1) then r8 = InputLayerWidth * 4, else if white (0) then r8 = 0
   add rcx, r8
   xor r11, r11                      // r11 = 0
 
   @loop1:
-  vmovdqu32 zmm0, [rdx+r11]         //  Load Bias
-  vmovdqu32 [rcx+r11], zmm0         //  Save to Self
+  vmovdqa32 zmm0, [rdx+r11]         //  Load Bias
+  vmovdqa32 [rcx+r11], zmm0         //  Save to Self
 
   add r11, 64
   cmp r11, InputLayerWidth * 4
   jl  @loop1
+
+  vzeroupper
   end;
 
 
@@ -400,44 +403,52 @@ procedure Add_asm_AVX512(dest, IndexAdd : PInteger; colour : integer);
   asm
   .NOFRAME
 
+  movzx r8, r8b
   imul r8, InputLayerWidth * 4      // if colour = black (1) then r8 = InputLayerWidth * 4, else if white (0) then r8 = 0
   add rcx, r8
   xor r11, r11                      // r11 = 0
 
   @loop1:
-  vmovdqu32 zmm0, [rcx+r11]         //  Load Self
+  vmovdqa32 zmm0, [rcx+r11]         //  Load Self
   vpaddd zmm0, zmm0,   [rdx+r11]    //  Add
-  vmovdqu32 [rcx+r11], zmm0         //  Save Self
+  vmovdqa32 [rcx+r11], zmm0         //  Save Self
 
   add r11, 64
   cmp r11, InputLayerWidth * 4
   jl  @loop1
+
+  vzeroupper
   end;
 
 
 procedure UpdateMove_asm_AVX512(source, dest, IndexAdd, IndexSub : PInteger; colour : integer);
   asm
-  mov r10d, colour
+  .NOFRAME
 
+  mov r10d, colour
   imul r10, InputLayerWidth * 4     // if colour = black (1) then r10 = InputLayerWidth * 4, else if white (0) then r10 = 0
   add rcx, r10
   add rdx, r10
   xor r11, r11                      // r11 = 0
 
   @loop1:
-  vmovdqu32 zmm0, [rcx+r11]         //  Load from Self as source
+  vmovdqa32 zmm0, [rcx+r11]         //  Load from Self as source
   vpaddd zmm0, zmm0,   [r8+r11]     //  Add
   vpsubd zmm0, zmm0,   [r9+r11]     //  Sub
-  vmovdqu32 [rdx+r11], zmm0         //  Save to Dest
+  vmovdqa32 [rdx+r11], zmm0         //  Save to Dest
 
   add r11, 64
   cmp r11, InputLayerWidth * 4
   jl  @loop1
+
+  vzeroupper
   end;
 
 
 procedure UpdateCapture_asm_AVX512(source, dest, IndexAdd, IndexSub1, IndexSub2 : PInteger; colour : integer);
   asm
+  .NOFRAME
+
   mov r11d, colour
   mov r10, IndexSub2
 
@@ -447,15 +458,17 @@ procedure UpdateCapture_asm_AVX512(source, dest, IndexAdd, IndexSub1, IndexSub2 
   xor r11, r11                      // r11 = 0
 
   @loop1:
-  vmovdqu32 zmm0, [rcx+r11]         //  Load from Self as source
+  vmovdqa32 zmm0, [rcx+r11]         //  Load from Self as source
   vpaddd zmm0, zmm0,   [r8+r11]     //  Add
   vpsubd zmm0, zmm0,   [r9+r11]     //  Sub
   vpsubd zmm0, zmm0,   [r10+r11]    //  Sub
-  vmovdqu32 [rdx+r11], zmm0         //  Save to Dest
+  vmovdqa32 [rdx+r11], zmm0         //  Save to Dest
 
   add r11, 64
   cmp r11, InputLayerWidth * 4
   jl  @loop1
+
+  vzeroupper
   end;
 
 
@@ -463,19 +476,22 @@ procedure UpdateSelf_asm_AVX512(source, IndexAdd, IndexSub : PInteger; colour : 
   asm
   .NOFRAME
 
+  movzx r9, r9b
   imul r9, InputLayerWidth * 4       // if colour = black (1) then r11 = InputLayerWidth * 4, else if white (0) then r11 = 0
   add rcx, r9
   xor r11, r11                       // r11 = 0
 
   @loop1:
-  vmovdqu32 zmm0, [rcx+r11]          //  Load Self
+  vmovdqa32 zmm0, [rcx+r11]          //  Load Self
   vpaddd zmm0, zmm0,   [rdx+r11]     //  Add
   vpsubd zmm0, zmm0,   [r8+r11]      //  Sub
-  vmovdqu32 [rcx+r11], zmm0          //  Save Self
+  vmovdqa32 [rcx+r11], zmm0          //  Save Self
 
   add r11, 64
   cmp r11, InputLayerWidth * 4
   jl  @loop1
+
+  vzeroupper
   end;
 
 
@@ -484,7 +500,9 @@ function GetEval_asm_AVX512(source, weights : PInteger; colour : integer) : int1
     clamp : integer = 46340;
 
   asm
-  test r8, r8
+  .NOFRAME
+
+  test r8d, r8d
   JNZ @BTP
 
   @WTP:
@@ -503,44 +521,38 @@ function GetEval_asm_AVX512(source, weights : PInteger; colour : integer) : int1
   @start:
   xor r8, r8                         // r8 = 0
 
-  vxorps zmm0, zmm0, zmm0            // zero the accummulator
-  vxorps zmm9, zmm9, zmm9            // zero the accummulator
-  vxorps zmm3, zmm3, zmm3            // zero the floor
+  vpxord zmm0, zmm0, zmm0            // zero the accummulator
+  vpxord zmm5, zmm5, zmm5            // zero the accummulator
+  vpxord zmm3, zmm3, zmm3            // zero the floor
 
-  vpbroadcastd zmm8, clamp
+  vpbroadcastd zmm4, clamp
 
   @loop1:
-                                         //  STP accumulator
-  vmovdqu32 zmm1, [rcx+r8]               //  mov 16 int32 values B into ymm1
-  vmovdqu32 zmm2, [rdx+r8]               //  mov 16 int32 values C into ymm2
+                                       //  STP accumulator
+  vmovdqa32 zmm1, [rcx+r8]             //  mov 16 int32 values B into ymm1
+  vpmaxsd   zmm1, zmm3, zmm1           //  perform ReLU  i.e. if B < 0 then B = 0, 16 int32 at a time
+  vpminsd   zmm1, zmm4, zmm1           //  clamp to sqrt(2^31)
+  vpmulld   zmm1, zmm1, zmm1           //  square the result i.e. scReLU activation
+  vpsrad    zmm1, zmm1, 8              //  divide by 256
+  vpmulld   zmm1, zmm1, [rdx+r8]       //  Calculate D = B x C, 16 int32 at a time
+  vpaddd    zmm0, zmm0, zmm1
 
-  vpmaxsd zmm1, zmm3, zmm1               //  perform ReLU  i.e. if B < 0 then B = 0, 16 int32 at a time
-  vpminsd zmm1, zmm8, zmm1               //  clamp to sqrt(2^31)
-  vpmulld zmm1, zmm1, zmm1               //  square the result i.e. scReLU activation
-  vpsrad zmm1, zmm1, 8                   //  divide by 256
-
-                                         //  OTP accumulator
-  vmovdqu32 zmm5, [r9+r8]                //  mov 16 int32 values B into ymm5
-  vmovdqu32 zmm6, [r10+r8]               //  mov 16 int32 values C into ymm6
-
-  vpmaxsd zmm5, zmm3, zmm5               //  perform ReLU  i.e. if B < 0 then B = 0, 16 int32 at a time
-  vpminsd zmm5, zmm8, zmm5               //  clamp to sqrt(2^31)
-  vpmulld zmm5, zmm5, zmm5               //  square the result i.e. scReLU activation
-  vpsrad zmm5, zmm5, 8                   //  divide by 256
-
-  vpmulld zmm4, zmm1, zmm2               //  Calculate D = B x C, 16 int32 at a time
-  vpaddd zmm0, zmm0, zmm4
-
-  vpmulld zmm7, zmm5, zmm6               //  Calculate D = B x C, 16 int32 at a time
-  vpaddd zmm9, zmm9, zmm7
+                                       //  OTP accumulator
+  vmovdqa32 zmm2, [r9+r8]              //  mov 16 int32 values B into ymm5
+  vpmaxsd   zmm2, zmm2, zmm3           //  perform ReLU  i.e. if B < 0 then B = 0, 16 int32 at a time
+  vpminsd   zmm2, zmm4, zmm2           //  clamp to sqrt(2^31)
+  vpmulld   zmm2, zmm2, zmm2           //  square the result i.e. scReLU activation
+  vpsrad    zmm2, zmm2, 8              //  divide by 256
+  vpmulld   zmm2, zmm2, [r10+r8]       //  Calculate D = B x C, 16 int32 at a time
+  vpaddd    zmm5, zmm5, zmm2
 
   add r8, 64
   cmp r8, InputLayerWidth * 4
   jl  @loop1
 
-  vpaddd zmm0, zmm0, zmm9
+  vpaddd zmm0, zmm0, zmm5
 
-  vextracti32x8   ymm1, zmm0, 1          // ymm1 = upper 8 dwords
+  vextracti64x4   ymm1, zmm0, 1          // ymm1 = upper 8 dwords
   vpaddd          ymm0, ymm0, ymm1       // reduce 16 -> 8 (sum pairs: i += i+8)
 
   vperm2i128      ymm1, ymm0, ymm0, $1   // swap 128-bit halves
@@ -552,7 +564,9 @@ function GetEval_asm_AVX512(source, weights : PInteger; colour : integer) : int1
   vpshufd         ymm1, ymm0, $4E        // shuffle  [2,3,0,1] per 128-bit lane
   vpaddd          ymm0, ymm0, ymm1       // reduce 2 -> 1 (final sum replicated in all dwords)
 
-  vextracti32x4   xmm0, ymm0, 0          // get low 128 bits
+  vzeroupper
+
+  //vextracti32x4   xmm0, ymm0, 0          // get low 128 bits
   movd            eax, xmm0              // move low 32 bits to eax
   mov          edx, eax
   and          edx, $FFFF                //  edx = remainder
@@ -576,6 +590,20 @@ class operator TGameNet.Initialize(out x: TGameNet);
 
   begin
   x.Hash := PRNG.Rand64;
+
+  x.Weights := PWeights(_aligned_malloc(SizeOf(TWeights), 64));
+  x.Bias := PBias(_aligned_malloc(SizeOf(TBias), 64));
+  x.OutputWeights := POutputWeights(_aligned_malloc(SizeOf(TOutputWeights), 64));
+  x.OutputBias := POutputBias(_aligned_malloc(SizeOf(TOutputBias), 64));
+  end;
+
+
+class operator TGameNet.Finalize(var x: TGameNet);
+  begin
+  _aligned_free(x.Weights);
+  _aligned_free(x.Bias);
+  _aligned_free(x.OutputWeights);
+  _aligned_free(x.OutputBias);
   end;
 
 
@@ -588,11 +616,14 @@ function TGameNet.LoadFromResource(const ResourceIdentifier : string) : boolean;
   Stream := TResourceStream.Create(HInstance, ResourceIdentifier, RT_RCDATA);
 
     try
-    stream.Read(weights[0], length(weights) * sizeof(int32));
-    stream.Read(Bias[0], length(Bias) * sizeof(int32));
+    if Stream.Size <> SizeOf(TWeights) + SizeOf(TBias) + SizeOf(TOutputWeights) + SizeOf(TOutputBias) then
+      exit;
 
-    stream.Read(OutputWeights[0], length(OutputWeights) * sizeof(int32));
-    stream.Read(OutputBias[0], length(OutputBias) * sizeof(int32));
+    stream.Read(weights[0], length(weights^) * sizeof(int32));
+    stream.Read(Bias[0], length(Bias^) * sizeof(int32));
+
+    stream.Read(OutputWeights[0], length(OutputWeights^) * sizeof(int32));
+    stream.Read(OutputBias[0], length(OutputBias^) * sizeof(int32));
     result := true;
 
     finally
@@ -611,11 +642,14 @@ function TGameNet.LoadFromFile(const Filename : string) : boolean;
     try
     Stream.LoadFromFile(Filename);
 
-    stream.ReadBuffer(weights[0], length(weights) * sizeof(int32));
-    stream.ReadBuffer(Bias[0], length(Bias) * sizeof(int32));
+    if Stream.Size <> SizeOf(TWeights) + SizeOf(TBias) + SizeOf(TOutputWeights) + SizeOf(TOutputBias) then
+      exit;
 
-    stream.ReadBuffer(OutputWeights[0], length(OutputWeights) * sizeof(int32));
-    stream.ReadBuffer(OutputBias[0], length(OutputBias) * sizeof(int32));
+    stream.ReadBuffer(weights[0], length(weights^) * sizeof(int32));
+    stream.ReadBuffer(Bias[0], length(Bias^) * sizeof(int32));
+
+    stream.ReadBuffer(OutputWeights[0], length(OutputWeights^) * sizeof(int32));
+    stream.ReadBuffer(OutputBias[0], length(OutputBias^) * sizeof(int32));
     result := true;
 
     finally
@@ -624,218 +658,218 @@ function TGameNet.LoadFromFile(const Filename : string) : boolean;
   end;
 
 
-procedure TGameNet.RefreshAccumulator(var Accumulator : TAccumulator; const Board : TBoard);
+procedure TGameNet.RefreshAccumulator(Accumulator : PAccumulator; const Board : TBoard);
   var
     index_W, index_B : int64;
     Pegs : UInt64;
     Cell : integer;
 
   begin
-  GetBias_asm(@Accumulator, @Bias[0], white);
-  GetBias_asm(@Accumulator, @Bias[0], black);
+  GetBias_asm(@Accumulator[0], @Bias[0], white);
+  GetBias_asm(@Accumulator[0], @Bias[0], black);
 
   Pegs := Board.WhitePegs and Board.Pawns;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_W := ( (pawn-1) * 64 + Cell) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_W], white);
+    Add_asm(@Accumulator[0], @Weights[index_W], white);
     end;
 
   Pegs := Board.WhitePegs and Board.Knights;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_W := ( (knight-1) * 64 + Cell) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_W], white);
+    Add_asm(@Accumulator[0], @Weights[index_W], white);
     end;
 
   Pegs := Board.WhitePegs and Board.Bishops;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_W := ( (bishop-1) * 64 + Cell) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_W], white);
+    Add_asm(@Accumulator[0], @Weights[index_W], white);
     end;
 
   Pegs := Board.WhitePegs and Board.Rooks;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_W := ( (rook-1) * 64 + Cell) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_W], white);
+    Add_asm(@Accumulator[0], @Weights[index_W], white);
     end;
 
   Pegs := Board.WhitePegs and Board.Queens;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_W := ( (queen-1) * 64 + Cell) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_W], white);
+    Add_asm(@Accumulator[0], @Weights[index_W], white);
     end;
 
   Pegs := Board.WhitePegs and Board.Kings;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_W := ( (king-1) * 64 + Cell) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_W], white);
+    Add_asm(@Accumulator[0], @Weights[index_W], white);
     end;
 
 
   Pegs := Board.BlackPegs and Board.Pawns;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_W := (Black * 384 + (pawn-1) * 64 + Cell) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_W], white);
+    Add_asm(@Accumulator[0], @Weights[index_W], white);
     end;
 
   Pegs := Board.BlackPegs and Board.Knights;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_W := (Black * 384 + (knight-1) * 64 + Cell) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_W], white);
+    Add_asm(@Accumulator[0], @Weights[index_W], white);
     end;
 
   Pegs := Board.BlackPegs and Board.Bishops;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_W := (Black * 384 + (bishop-1) * 64 + Cell) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_W], white);
+    Add_asm(@Accumulator[0], @Weights[index_W], white);
     end;
 
   Pegs := Board.BlackPegs and Board.Rooks;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_W := (Black * 384 + (rook-1) * 64 + Cell) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_W], white);
+    Add_asm(@Accumulator[0], @Weights[index_W], white);
     end;
 
   Pegs := Board.BlackPegs and Board.Queens;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_W := (Black * 384 + (queen-1) * 64 + Cell) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_W], white);
+    Add_asm(@Accumulator[0], @Weights[index_W], white);
     end;
 
   Pegs := Board.BlackPegs and Board.Kings;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_W := (Black * 384 + (king-1) * 64 + Cell) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_W], white);
+    Add_asm(@Accumulator[0], @Weights[index_W], white);
     end;
 
 
   Pegs := Board.WhitePegs and Board.Pawns;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_B := (Black * 384 + (pawn-1) * 64 + (Cell xor 56)) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_B], black);
+    Add_asm(@Accumulator[0], @Weights[index_B], black);
     end;
 
   Pegs := Board.WhitePegs and Board.Knights;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_B := (Black * 384 + (knight-1) * 64 + (Cell xor 56)) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_B], black);
+    Add_asm(@Accumulator[0], @Weights[index_B], black);
     end;
 
   Pegs := Board.WhitePegs and Board.Bishops;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_B := (Black * 384 + (bishop-1) * 64 + (Cell xor 56)) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_B], black);
+    Add_asm(@Accumulator[0], @Weights[index_B], black);
     end;
 
   Pegs := Board.WhitePegs and Board.Rooks;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_B := (Black * 384 + (rook-1) * 64 + (Cell xor 56)) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_B], black);
+    Add_asm(@Accumulator[0], @Weights[index_B], black);
     end;
 
   Pegs := Board.WhitePegs and Board.Queens;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_B := (Black * 384 + (queen-1) * 64 + (Cell xor 56)) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_B], black);
+    Add_asm(@Accumulator[0], @Weights[index_B], black);
     end;
 
   Pegs := Board.WhitePegs and Board.Kings;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_B := (Black * 384 + (king-1) * 64 + (Cell xor 56)) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_B], black);
+    Add_asm(@Accumulator[0], @Weights[index_B], black);
     end;
 
 
   Pegs := Board.BlackPegs and Board.Pawns;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_B := ( (pawn-1) * 64 + (Cell xor 56)) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_B], black);
+    Add_asm(@Accumulator[0], @Weights[index_B], black);
     end;
 
   Pegs := Board.BlackPegs and Board.Knights;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_B := ( (knight-1) * 64 + (Cell xor 56)) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_B], black);
+    Add_asm(@Accumulator[0], @Weights[index_B], black);
     end;
 
   Pegs := Board.BlackPegs and Board.Bishops;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_B := ( (bishop-1) * 64 + (Cell xor 56)) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_B], black);
+    Add_asm(@Accumulator[0], @Weights[index_B], black);
     end;
 
   Pegs := Board.BlackPegs and Board.Rooks;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_B := ( (rook-1) * 64 + (Cell xor 56)) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_B], black);
+    Add_asm(@Accumulator[0], @Weights[index_B], black);
     end;
 
   Pegs := Board.BlackPegs and Board.Queens;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_B := ( (queen-1) * 64 + (Cell xor 56)) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_B], black);
+    Add_asm(@Accumulator[0], @Weights[index_B], black);
     end;
 
   Pegs := Board.BlackPegs and Board.Kings;
   while Pegs <> 0 do
     begin
-    Cell := PopLowBit_Alt(Pegs);
+    Cell := PopLowBit(Pegs);
     index_B := ( (king-1) * 64 + (Cell xor 56)) * InputLayerWidth;
-    Add_asm(@Accumulator, @Weights[index_B], black);
+    Add_asm(@Accumulator[0], @Weights[index_B], black);
     end;
   end;
 
 
-procedure TGameNet.UpdateAccumulator(const SourceAccumulator : TAccumulator; var DestAccumulator : TAccumulator; Move : TMove; const Board : TBoard);
+procedure TGameNet.UpdateAccumulator(SourceAccumulator, DestAccumulator : PAccumulator; Move : TMove; const Board : TBoard);
   var
     index_Add1, index_Sub1, index_Sub2, dummy : integer;
     Source, Dest, Piece, CapturedPiece, PromotionPiece, epCell, TempSource, TempDest : integer;
-    ColourOffset, PieceOffset : integer;
+    ColourOffset, PieceOffset, CapturedOffset, PromotionOffset : integer;
 
   begin
   Piece := (Move shr 12) and $F;              // Piece := Move.Piece
@@ -847,10 +881,6 @@ procedure TGameNet.UpdateAccumulator(const SourceAccumulator : TAccumulator; var
   epCell := (Move shr 30) and $3F;
 
   ColourOffset :=  (1-Board.ToPlay) * 384;
-  PieceOffset := (Piece - 1) * 64;
-
-  index_Sub1 := (ColourOffset + PieceOffset + source) * InputLayerWidth;                  // source
-  index_Add1 := (ColourOffset + PieceOffset + dest) * InputLayerWidth;                    // dest
 
   // captured piece
   if CapturedPiece <> 0 then  // deducts captured piece values from accumulator
@@ -865,24 +895,45 @@ procedure TGameNet.UpdateAccumulator(const SourceAccumulator : TAccumulator; var
         TempDest := Dest - 8;
       end;
 
-    PieceOffset := (CapturedPiece - 1) * 64;
-    index_Sub2 := ((384 - ColourOffset) + PieceOffset + TempDest) * InputLayerWidth;
+    PieceOffset := (Piece - 1) * 64;
+    CapturedOffset := (CapturedPiece - 1) * 64;
 
-    UpdateCapture_asm(@SourceAccumulator, @DestAccumulator, @Weights[index_Add1], @Weights[index_Sub1], @Weights[index_Sub2], white);
+    index_Sub1 := (ColourOffset + PieceOffset + source) * InputLayerWidth;                      // source
+    index_Add1 := (ColourOffset + PieceOffset + dest) * InputLayerWidth;                        // dest
+    index_Sub2 := ((384 - ColourOffset) + CapturedOffset + TempDest) * InputLayerWidth;
+    UpdateCapture_asm(@SourceAccumulator[0], @DestAccumulator[0], @Weights[index_Add1], @Weights[index_Sub1], @Weights[index_Sub2], white);
+
+    index_Sub1 := ((384 - ColourOffset) + PieceOffset + (source xor 56)) * InputLayerWidth;     // source
+    index_Add1 := ((384 - ColourOffset) + PieceOffset + (dest xor 56)) * InputLayerWidth;       // dest
+    index_Sub2 := (ColourOffset + CapturedOffset + (TempDest xor 56)) * InputLayerWidth;
+    UpdateCapture_asm(@SourceAccumulator[0], @DestAccumulator[0], @Weights[index_Add1], @Weights[index_Sub1], @Weights[index_Sub2], black);
     end
    else
-    UpdateMove_asm(@SourceAccumulator, @DestAccumulator, @Weights[index_Add1], @Weights[index_Sub1], white);
+    begin
+    PieceOffset := (Piece - 1) * 64;
+
+    index_Sub1 := (ColourOffset + PieceOffset + source) * InputLayerWidth;                      // source
+    index_Add1 := (ColourOffset + PieceOffset + dest) * InputLayerWidth;                        // dest
+    UpdateMove_asm(@SourceAccumulator[0], @DestAccumulator[0], @Weights[index_Add1], @Weights[index_Sub1], white);
+
+    index_Sub1 := ((384 - ColourOffset) + PieceOffset + (source xor 56)) * InputLayerWidth;     // source
+    index_Add1 := ((384 - ColourOffset) + PieceOffset + (dest xor 56)) * InputLayerWidth;       // dest
+    UpdateMove_asm(@SourceAccumulator[0], @DestAccumulator[0], @Weights[index_Add1], @Weights[index_Sub1], black);
+    end;
 
   // promotion piece
   if PromotionPiece <> 0 then // add promotion piece & deduct pawn from accummulator
     begin
     PieceOffset := (Pawn - 1) * 64;
+    PromotionOffset := (PromotionPiece - 1) * 64;
+
     index_Sub1 := (ColourOffset + PieceOffset + Dest) * InputLayerWidth;
+    index_Add1 := (ColourOffset + PromotionOffset + Dest) * InputLayerWidth;
+    UpdateSelf_asm(@DestAccumulator[0], @Weights[index_Add1], @Weights[index_Sub1], white);
 
-    PieceOffset := (PromotionPiece - 1) * 64;
-    index_Add1 := (ColourOffset + PieceOffset + Dest) * InputLayerWidth;
-
-    UpdateSelf_asm(@DestAccumulator, @Weights[index_Add1], @Weights[index_Sub1], white);
+    index_Sub1 := ((384 - ColourOffset) + PieceOffset + (Dest xor 56)) * InputLayerWidth;
+    index_Add1 := ((384 - ColourOffset) + PromotionOffset + (Dest xor 56)) * InputLayerWidth;
+    UpdateSelf_asm(@DestAccumulator[0], @Weights[index_Add1], @Weights[index_Sub1], black);
     end;
 
   // castling move
@@ -896,7 +947,11 @@ procedure TGameNet.UpdateAccumulator(const SourceAccumulator : TAccumulator; var
 
       index_Sub1 := (ColourOffset + PieceOffset + TempSource) * InputLayerWidth;              // source
       index_Add1 := (ColourOffset + PieceOffset + TempDest) * InputLayerWidth;                // dest
-      UpdateSelf_asm(@DestAccumulator, @Weights[index_Add1], @Weights[index_Sub1], white);
+      UpdateSelf_asm(@DestAccumulator[0], @Weights[index_Add1], @Weights[index_Sub1], white);
+
+      index_Sub1 := ((384 - ColourOffset) + PieceOffset + (TempSource xor 56)) * InputLayerWidth;      // source
+      index_Add1 := ((384 - ColourOffset) + PieceOffset + (TempDest xor 56)) * InputLayerWidth;        // dest
+      UpdateSelf_asm(@DestAccumulator[0], @Weights[index_Add1], @Weights[index_Sub1], black);
       end
 
     else if (Dest - Source = -2) then   // Queen Side Castle, adjust rook
@@ -907,76 +962,17 @@ procedure TGameNet.UpdateAccumulator(const SourceAccumulator : TAccumulator; var
 
       index_Sub1 := (ColourOffset + PieceOffset + TempSource) * InputLayerWidth;              // source
       index_Add1 := (ColourOffset + PieceOffset + TempDest) * InputLayerWidth;                // dest
-      UpdateSelf_asm(@DestAccumulator, @Weights[index_Add1], @Weights[index_Sub1], white);
-      end;
-    end;
-
-  PieceOffset := (Piece - 1) * 64;
-
-  index_Sub1 := ((384 - ColourOffset) + PieceOffset + (source xor 56)) * InputLayerWidth;     // source
-  index_Add1 := ((384 - ColourOffset) + PieceOffset + (dest xor 56)) * InputLayerWidth;       // dest
-
-  // captured piece
-  if CapturedPiece <> 0 then  // deducts captured piece values from accumulator
-    begin
-    TempDest := Dest;
-
-    if (CapturedPiece = pawn) and (epCell = Dest) then
-      begin
-      if Board.ToPlay = Black then
-        TempDest := Dest + 8
-       else
-        TempDest := Dest - 8;
-      end;
-
-    PieceOffset := (CapturedPiece - 1) * 64;
-    index_Sub2 := (ColourOffset + PieceOffset + (TempDest xor 56)) * InputLayerWidth;
-
-    UpdateCapture_asm(@SourceAccumulator, @DestAccumulator, @Weights[index_Add1], @Weights[index_Sub1], @Weights[index_Sub2], black);
-    end
-   else
-     UpdateMove_asm(@SourceAccumulator, @DestAccumulator, @Weights[index_Add1], @Weights[index_Sub1], black);
-
-  // promotion piece
-  if PromotionPiece <> 0 then // add promotion piece & deduct pawn from accummulator
-    begin
-    PieceOffset := (Pawn - 1) * 64;
-    index_Sub1 := ((384 - ColourOffset) + PieceOffset + (Dest xor 56)) * InputLayerWidth;
-
-    PieceOffset := (PromotionPiece - 1) * 64;
-    index_Add1 := ((384 - ColourOffset) + PieceOffset + (Dest xor 56)) * InputLayerWidth;
-
-    UpdateSelf_asm(@DestAccumulator, @Weights[index_Add1], @Weights[index_Sub1], black);
-    end;
-
-  // castling move
-  if (Piece = King) then
-    begin
-    if (Dest - Source = 2) then    // King Side Castle, adjust rook
-      begin
-      TempDest := Dest - 1;
-      TempSource := Source + 3;
-      PieceOffset := (Rook - 1) * 64;
+      UpdateSelf_asm(@DestAccumulator[0], @Weights[index_Add1], @Weights[index_Sub1], white);
 
       index_Sub1 := ((384 - ColourOffset) + PieceOffset + (TempSource xor 56)) * InputLayerWidth;      // source
       index_Add1 := ((384 - ColourOffset) + PieceOffset + (TempDest xor 56)) * InputLayerWidth;        // dest
-      UpdateSelf_asm(@DestAccumulator, @Weights[index_Add1], @Weights[index_Sub1], black);
-      end
-     else if (Dest - Source = -2) then   // Queen Side Castle, adjust rook
-      begin
-      TempDest := Dest + 1;
-      TempSource := Source - 4;
-      PieceOffset := (Rook - 1) * 64;
-
-      index_Sub1 := ((384 - ColourOffset) + PieceOffset + (TempSource xor 56)) * InputLayerWidth;      // source
-      index_Add1 := ((384 - ColourOffset) + PieceOffset + (TempDest xor 56)) * InputLayerWidth;        // dest
-      UpdateSelf_asm(@DestAccumulator, @Weights[index_Add1], @Weights[index_Sub1], black);
+      UpdateSelf_asm(@DestAccumulator[0], @Weights[index_Add1], @Weights[index_Sub1], black);
       end;
     end;
   end;
 
 
-function  TGameNet.ScoreFromAccumulator(const Accumulator : TAccumulator; colour, piececount : integer) : integer;
+function  TGameNet.ScoreFromAccumulator(Accumulator : PAccumulator; colour, piececount : integer) : integer;
   var
     bucket, index : integer;
 
@@ -984,33 +980,40 @@ function  TGameNet.ScoreFromAccumulator(const Accumulator : TAccumulator; colour
   bucket := bucketLookup[pieceCount];
   index := bucket * Accumulator_Width;
 
-  result := GetEval_asm(@Accumulator, @OutputWeights[index], colour) + OutputBias[bucket];     // result = score from P.O.V. of side to play
+  result := GetEval_asm(PInteger(Accumulator), @OutputWeights[index], colour) + OutputBias[bucket];     // result = score from P.O.V. of side to play
 
-  result := min(result, MateScoreCutoff - 1);
-  result := max(result, -MateScoreCutoff + 1);
+  result := min(result, TB_WinCutoff - MaxSearchPly * 2);
+  result := max(result, -TB_WinCutoff + MaxSearchPly * 2);
+
   end;
 
 
 function TGameNet.Score(const Board : TBoard) : integer;
   var
-    Accumulator : TAccumulator;
+    Alignable_Accumulator : TAlignableAccumulator;
+    Accumulator : PAccumulator;
     pieceCount : integer;
 
   begin
+  Accumulator := PAccumulator(((NativeUInt(@Alignable_Accumulator) + 63) and not 63));
+
   RefreshAccumulator(Accumulator, Board);
   pieceCount := bitcount(Board.Queens or Board.Rooks or Board.Bishops or Board.Knights);
   result := ScoreFromAccumulator(Accumulator, Board.ToPlay, pieceCount);                    // result = score in cp, from P.O.V. of side to play
   end;
 
 
-function ScoreFromAccumulator(const Accumulator : TAccumulator; const Board : TBoard) : integer;
+function ScoreFromAccumulator(Accumulator : PAccumulator; const Board : TBoard) : integer;
   var
     EndGameIndex : integer;
     EvalFunction : TEvalFunction;
     pieceCount : integer;
+    Hash : UInt64;
 
   begin
-  if EvalHashTable.RetrieveScore(Board.Hash, result) = false then
+  Hash := Board.Hash xor Board.HalfMoveHash;
+
+  if EvalHashTable.RetrieveScore(Hash, result) = false then
     begin
     pieceCount := bitcount(Board.Queens or Board.Rooks or Board.Bishops or Board.Knights);
     result := Game_Net.ScoreFromAccumulator(Accumulator, Board.ToPlay, pieceCount);
@@ -1024,24 +1027,25 @@ function ScoreFromAccumulator(const Accumulator : TAccumulator; const Board : TB
         result := EvalFunction(Board, result);
       end;
 
-    result := min(result, MateScoreCutoff - MaxSearchPly * 2);
-    result := max(result, -MateScoreCutoff + MaxSearchPly * 2);
+    if Board.HalfCount > Board.HalfMoveReductionCutoff then
+      result := result * max (0, 65 + Board.HalfMoveReductionCutoff - Board.HalfCount) div 64;     //  HalfMoveReductionCutoff = 64
 
-    EvalHashTable.StoreScore(Board.Hash, result);
+    result := min(result, TB_WinCutoff - MaxSearchPly * 2);
+    result := max(result, -TB_WinCutoff + MaxSearchPly * 2);
+
+    EvalHashTable.StoreScore(Hash, result);
     end;
 
-  if Board.HalfCount > 36 then
-    result := result * (165 - Board.HalfCount) div 128;
   end;
 
 
-procedure Update_Accumulator(const SourceAccumulator : TAccumulator; var DestAccumulator : TAccumulator; Move : TMove; const Board : TBoard);
+procedure Update_Accumulator(SourceAccumulator, DestAccumulator : PAccumulator; Move : TMove; const Board : TBoard);
   begin
   Game_Net.UpdateAccumulator(SourceAccumulator, DestAccumulator, Move, Board);
   end;
 
 
-procedure Refresh_Accumulator(var Accummulator : TAccumulator; const Board : TBoard);
+procedure Refresh_Accumulator(Accummulator : PAccumulator; const Board : TBoard);
   begin
   Game_Net.RefreshAccumulator(Accummulator, Board);
   end;
@@ -1054,7 +1058,6 @@ procedure Load_GameNets;
   Net.LoadFromResource('_768x512_x2_gen8_b6');
   Game_Net := @Net;
   end;
-
 
 Initialization
 

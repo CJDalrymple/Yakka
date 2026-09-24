@@ -34,9 +34,11 @@ function AVX_Supported : boolean;
 function AVX2_Supported : boolean;
 function AVX512f_Supported : boolean;
 function AVX512fp16_Supported : boolean;
+function Detect_x86_64_level : integer;
 
 implementation
 
+{$CODEALIGN 16}
 
 // popcnt instruction  used in unit : Common
 
@@ -168,6 +170,163 @@ function AVX512fp16_Supported : boolean;
   POP RBX
   end;
 
+
+function Detect_x86_64_level : integer;
+  // Returns:  1, 2, 3, or 4
+
+  asm
+  push rbx
+  push rsi
+  push rdi
+
+  // default: x86-64-v1
+
+  mov     r11d, 1
+
+  // -------------------------------------------------
+  //  CPUID leaf 1: basic features
+  // -------------------------------------------------
+
+  mov     eax, 1
+  cpuid               // EAX, EBX, ECX, EDX updated
+  mov     r8d, ecx    // save ECX(1)
+  mov     r9d, edx    // save EDX(1)
+
+
+  // ------------- check x86-64-v2  -------------------------
+  //
+  // need: SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, CX16, LAHF_LM
+  // --------------------------------------------------------
+
+
+  bt      r8d, 0                // SSE3 (ECX bit 0)
+  jnc     @finish
+
+  bt      r8d, 9               // SSSE3 (ECX bit 9)
+  jnc     @finish
+
+  bt      r8d, 19              // SSE4.1 (ECX bit 19)
+  jnc     @finish
+
+  bt      r8d, 20              // SSE4.2 (ECX bit 20)
+  jnc     @finish
+
+  bt      r8d, 23              // POPCNT (ECX bit 23)
+  jnc     @finish
+
+  bt      r8d, 13              // CX16 (ECX bit 13)
+  jnc     @finish
+
+  // LAHF_LM from CPUID.(EAX=80000001).ECX bit 0
+  mov     eax, $80000000
+  cpuid
+  cmp     eax, $80000001
+  jb      @finish              // no extended leaf -> not v2
+
+  mov     eax, $80000001
+  cpuid                        // ECX, EDX updated
+  bt      ecx, 0               // LAHF_LM
+  jnc     @finish
+
+  mov     r11d, 2              // all v2 features present
+
+
+  // --------------- check x86-64-v3----------------------
+  //
+  // need: AVX, AVX2, BMI1, BMI2, F16C, FMA, LZCNT, MOVBE
+  // -----------------------------------------------------
+
+  // we still have r8d = ECX(1), r9d = EDX(1) from leaf 1
+  // but we overwrote ECX with 0x80000001 above, so reload leaf 1
+
+  mov     eax, 1
+  cpuid
+  mov     r8d, ecx             // ECX(1)
+  mov     r9d, edx             // EDX(1)
+
+  bt      r8d, 27              // OSXSAVE (ECX bit 27)
+  jnc     @finish              // stay at v2
+
+  xor     ecx, ecx
+  xgetbv
+  and     eax, 6
+  cmp     eax, 6
+  jne     @finish              // OS does not support AVX
+
+  mov     eax, 7
+  xor     ecx, ecx
+  cpuid
+  mov     r10d, ebx
+
+  bt      r8d, 28              // AVX (ECX bit 28)
+  jnc     @finish              // stay at v2
+
+  bt      r8d, 12              // FMA (ECX bit 12)
+  jnc     @finish
+
+  bt      r8d, 29              // F16C (ECX bit 29)
+  jnc     @finish
+
+  bt      r8d, 22              // MOVBE (ECX bit 22)
+  jnc     @finish
+
+  mov     eax, $80000001       // LZCNT from CPUID.(EAX=80000001).ECX bit 5
+  cpuid
+  bt      ecx, 5
+  jnc     @finish
+
+  mov     eax, 7               // AVX2, BMI1, BMI2 from CPUID.(EAX=7, ECX=0)
+  xor     ecx, ecx
+  cpuid                        // EBX, ECX, EDX updated
+  mov     r10d, ebx            // EBX(7,0)
+
+  bt      r10d, 3              // BMI1 (EBX bit 3)
+  jnc     @finish
+
+  bt      r10d, 5              // AVX2 (EBX bit 5)
+  jnc     @finish
+
+  bt      r10d, 8              // BMI2 (EBX bit 8)
+  jnc     @finish
+
+  mov     r11d, 3              // all v3 features present
+
+
+  // ----------------  check x86-64-v4----------------------
+  //
+  // need: AVX512F, AVX512DQ, AVX512BW, AVX512VL, AVX512CD
+  // -------------------------------------------------------
+
+  // from CPUID.(EAX=7, ECX=0)
+  // we already have EBX, EDX from leaf 7 above
+  // EBX in r10d, EDX in edx
+
+  bt      r10d, 16             // AVX512F (EBX bit 16)
+  jnc     @finish              // stay at v3
+
+  bt      r10d, 17             // AVX512DQ (EBX bit 17)
+  jnc     @finish
+
+  bt      r10d, 30             // AVX512BW (EBX bit 30)
+  jnc     @finish
+
+  bt      r10d, 31             // AVX512VL (EBX bit 31)
+  jnc     @finish
+
+  bt      edx, 28              // AVX512CD (EDX bit 28)
+  jnc     @finish
+
+  mov     r11d, 4              // all v4 features present
+
+  @finish:
+
+  mov     eax, r11d
+
+  pop rdi
+  pop rsi
+  pop rbx
+
+  end;
 
 
 end.
